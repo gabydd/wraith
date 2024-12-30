@@ -58,8 +58,3 @@ pub fn main() !void {
     // Run the GUI event loop
     try app_runtime.run();
 }
-
-pub const ghostty_options = struct {
-    pub const Renderer = ghostty.renderer.OpenGL;
-    pub const runtime = ghostty.apprt.glfw;
-};

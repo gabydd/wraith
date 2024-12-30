@@ -26,6 +26,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const options = b.addModule("options", .{
+        .root_source_file = b.path("src/options.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    options.addImport("ghostty", ghostty.module("ghostty"));
+    ghostty.module("ghostty").addImport("options", options);
     exe.root_module.addImport("ghostty", ghostty.module("ghostty"));
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
