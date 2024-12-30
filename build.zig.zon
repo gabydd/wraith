@@ -1,0 +1,18 @@
+.{
+    .name = "ghostty-wayland",
+
+    .version = "0.0.0",
+
+    .dependencies = .{
+        .ghostty = .{
+            .url = "https://github.com/gabydd/ghostty/archive/c8b79aebc363cf4feb85f3056bded0ec3f746a4e.tar.gz",
+            .hash = "1220426cb37211ed3794a4c09cc9e8978b081551773d1a02d8cd50a656542392ae3d",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
