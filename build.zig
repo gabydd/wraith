@@ -1,4 +1,5 @@
 const std = @import("std");
+const Scanner = @import("zig-wayland").Scanner;
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -26,14 +27,21 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const options = b.addModule("options", .{
-        .root_source_file = b.path("src/options.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    options.addImport("ghostty", ghostty.module("ghostty"));
-    ghostty.module("ghostty").addImport("options", options);
     exe.root_module.addImport("ghostty", ghostty.module("ghostty"));
+    const scanner = Scanner.create(b, .{});
+    const wayland = b.createModule(.{ .root_source_file = scanner.result });
+
+    scanner.generate("wl_compositor", 1);
+
+    scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+    scanner.generate("xdg_wm_base", 1);
+
+    exe.root_module.addImport("wayland", wayland);
+    exe.linkLibC();
+    exe.linkSystemLibrary("wayland-client");
+
+    exe.linkSystemLibrary("wayland-egl");
+    exe.linkSystemLibrary("EGL");
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

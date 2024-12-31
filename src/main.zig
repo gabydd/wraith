@@ -4,6 +4,7 @@ const App = ghostty.App;
 const state = &ghostty.global.state;
 const apprt = ghostty.apprt;
 const posix = std.posix;
+
 pub fn main() !void {
     // We first start by initializing our global state. This will setup
     // process-level state we need to run the terminal. The reason we use
@@ -58,3 +59,8 @@ pub fn main() !void {
     // Run the GUI event loop
     try app_runtime.run();
 }
+
+pub const ghostty_options = struct {
+    pub const Renderer = ghostty.renderer.OpenGL;
+    pub const runtime = @import("wayland.zig");
+};

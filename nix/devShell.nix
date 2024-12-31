@@ -51,6 +51,10 @@
   pandoc,
   hyperfine,
   typos,
+  wayland-scanner,
+  wayland-protocols,
+  wayland,
+  libglvnd,
 }: let
   # See package.nix. Keep in sync.
   rpathLibs =
@@ -59,6 +63,7 @@
     ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       bzip2
+      libglvnd
       expat
       fontconfig
       freetype
@@ -80,6 +85,7 @@
       libadwaita
       gtk4
       glib
+      wayland
     ];
 in
   mkShell {
@@ -96,6 +102,8 @@ in
         scdoc
         zig
         zip
+        wayland-scanner
+        wayland-protocols
 
         # For web and wasm stuff
         nodejs
@@ -148,6 +156,7 @@ in
         libXi
         libXinerama
         libXrandr
+        libGL
 
         # Only needed for GTK builds
         libadwaita
