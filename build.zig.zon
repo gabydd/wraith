@@ -12,6 +12,10 @@
             .url = "https://codeberg.org/ifreund/zig-wayland/archive/a5e2e9b6a6d7fba638ace4d4b24a3b576a02685b.tar.gz",
             .hash = "1220d41b23ae70e93355bb29dac1c07aa6aeb92427a2dffc4375e94b4de18111248c",
         },
+        .@"zig-xkbcommon" = .{
+            .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/d8412eed455c8cfea5b4cda2ea260095ccb47045.tar.gz",
+            .hash = "12200989a0e5c5d8186dd16752e3d83d914d4f54ecca7b3e147443f13a9580ede671",
+        },
     },
 
     .paths = .{

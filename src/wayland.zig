@@ -2,6 +2,7 @@ const ghostty = @import("ghostty");
 const std = @import("std");
 
 const log = std.log;
+const posix = std.posix;
 
 const cli = ghostty.cli;
 const input = ghostty.input;
@@ -18,6 +19,8 @@ const Config = configpkg.Config;
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
+
+const xkb = @import("xkbcommon");
 
 const gl = ghostty.gl;
 const egl = @cImport({
@@ -38,6 +41,7 @@ const Context = struct {
 const Seat = struct {
     surface_map: *SurfaceMap,
     surface: ?*Surface,
+    xkb_state: ?*xkb.State,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -147,8 +151,179 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
 }
 fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void {
     _ = wl_keyboard;
-    _ = event;
-    _ = seat;
+    switch (event) {
+        .enter => |ev| {
+            const wl_surface = ev.surface orelse return;
+            const id = wl_surface.getId();
+            seat.surface = seat.surface_map.get(id);
+            // It doesn't matter which surface gains keyboard focus or what keys are
+            // currently pressed. We don't implement key repeat for simiplicity.
+        },
+        .leave => {
+            // There's nothing to do as we don't implement key repeat and
+            // only care about press events, not release.
+        },
+        .keymap => |ev| {
+            defer posix.close(ev.fd);
+
+            if (ev.format != .xkb_v1) {
+                log.err("unsupported keymap format {d}", .{@intFromEnum(ev.format)});
+                return;
+            }
+
+            const keymap_string = posix.mmap(null, ev.size, posix.PROT.READ, .{ .TYPE = .PRIVATE }, ev.fd, 0) catch |err| {
+                log.err("failed to mmap() keymap fd: {s}", .{@errorName(err)});
+                return;
+            };
+            defer posix.munmap(keymap_string);
+
+            const context = xkb.Context.new(.no_flags) orelse return;
+            const keymap = xkb.Keymap.newFromBuffer(
+                context,
+                keymap_string.ptr,
+                // The string is 0 terminated
+                keymap_string.len - 1,
+                .text_v1,
+                .no_flags,
+            ) orelse {
+                log.err("failed to parse xkb keymap", .{});
+                return;
+            };
+            defer keymap.unref();
+
+            const state = xkb.State.new(keymap) orelse {
+                log.err("failed to create xkb state", .{});
+                return;
+            };
+            defer state.unref();
+
+            if (seat.xkb_state) |s| s.unref();
+            seat.xkb_state = state.ref();
+        },
+        .modifiers => |ev| {
+            if (seat.xkb_state) |xkb_state| {
+                _ = xkb_state.updateMask(
+                    ev.mods_depressed,
+                    ev.mods_latched,
+                    ev.mods_locked,
+                    0,
+                    0,
+                    ev.group,
+                );
+            }
+        },
+        .key => |ev| {
+            const surface = seat.surface orelse return;
+            const mods: input.Mods = .{};
+            const action: input.Action = switch (ev.state) {
+                .released => .release,
+                .pressed => .press,
+                else => unreachable,
+            };
+            const xkb_state = seat.xkb_state orelse return;
+
+            // The wayland protocol gives us an input event code. To convert this to an xkb
+            // keycode we must add 8.
+            const keycode = ev.key + 8;
+
+            const keysym = xkb_state.keyGetOneSym(keycode);
+            if (keysym == .NoSymbol) return;
+            const KS = xkb.Keysym;
+            const key: input.Key = switch (@intFromEnum(keysym)) {
+                KS.a => .a,
+                KS.b => .b,
+                KS.c => .c,
+                KS.d => .d,
+                KS.e => .e,
+                KS.f => .f,
+                KS.g => .g,
+                KS.h => .h,
+                KS.i => .i,
+                KS.j => .j,
+                KS.k => .k,
+                KS.l => .l,
+                KS.m => .m,
+                KS.n => .n,
+                KS.o => .o,
+                KS.p => .p,
+                KS.q => .q,
+                KS.r => .r,
+                KS.s => .s,
+                KS.t => .t,
+                KS.u => .u,
+                KS.v => .v,
+                KS.w => .w,
+                KS.x => .x,
+                KS.y => .y,
+                KS.z => .z,
+                KS.@"0" => .zero,
+                KS.@"1" => .one,
+                KS.@"2" => .two,
+                KS.@"3" => .three,
+                KS.@"4" => .four,
+                KS.@"5" => .five,
+                KS.@"6" => .six,
+                KS.@"7" => .seven,
+                KS.@"8" => .eight,
+                KS.@"9" => .nine,
+                KS.Up => .up,
+                KS.Down => .down,
+                KS.Right => .right,
+                KS.Left => .left,
+                KS.Home => .home,
+                KS.End => .end,
+                KS.Page_Up => .page_up,
+                KS.Page_Down => .page_down,
+                KS.Escape => .escape,
+
+                KS.KP_Decimal => .kp_decimal,
+                KS.KP_Divide => .kp_divide,
+                KS.KP_Multiply => .kp_multiply,
+                KS.KP_Subtract => .kp_subtract,
+                KS.KP_Add => .kp_add,
+                KS.KP_Enter => .kp_enter,
+                KS.KP_Equal => .kp_equal,
+                KS.Dgrave_accent => .grave_accent,
+                KS.minus => .minus,
+                KS.equal => .equal,
+                KS.space => .space,
+                KS.semicolon => .semicolon,
+                KS.apostrophe => .apostrophe,
+                KS.comma => .comma,
+                KS.period => .period,
+                KS.slash => .slash,
+                KS.bracketleft => .left_bracket,
+                KS.bracketright => .right_bracket,
+                KS.backslash => .backslash,
+                KS.Return => .enter,
+                KS.Tab => .tab,
+                KS.BackSpace => .backspace,
+                KS.Delete => .delete,
+                else => .invalid,
+            };
+            var buf: [10]u8 = undefined;
+            const utf8_len = xkb_state.keyGetUtf8(keycode, &buf);
+            const utf8: []const u8 = buf[0..utf8_len];
+            const key_event: input.KeyEvent = .{
+                .action = action,
+                .key = key,
+                .physical_key = key,
+                .mods = mods,
+                .consumed_mods = .{},
+                .composing = false,
+                .utf8 = utf8,
+                .unshifted_codepoint = if (utf8.len > 0) @intCast(utf8[0]) else 0,
+            };
+
+            const effect = surface.core_surface.keyCallback(key_event) catch |err| {
+                log.err("error in key callback err={}", .{err});
+                return;
+            };
+
+            // Surface closed.
+            if (effect == .closed) return;
+        },
+    }
 }
 fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
     switch (event) {
@@ -182,6 +357,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 const seat = context.alloc.create(Seat) catch return;
                 seat.surface_map = context.surface_map;
                 seat.surface = null;
+                seat.xkb_state = null;
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
@@ -416,7 +592,11 @@ pub const App = struct {
     pub fn run(self: *App) !void {
         _ = try self.app.tick(self);
         while (true) {
-            if (self.display.dispatch() != .SUCCESS) return error.DispatchFailed;
+            const err = self.display.dispatch();
+            if (err != .SUCCESS) {
+                log.err("{}", .{err});
+                return error.DispatchFailed;
+            }
 
             // Tick the terminal app
             const should_quit = try self.app.tick(self);

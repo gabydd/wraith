@@ -55,6 +55,7 @@
   wayland-protocols,
   wayland,
   libglvnd,
+  libxkbcommon,
 }: let
   # See package.nix. Keep in sync.
   rpathLibs =
@@ -86,6 +87,7 @@
       gtk4
       glib
       wayland
+      libxkbcommon
     ];
 in
   mkShell {
@@ -146,6 +148,7 @@ in
         oniguruma
         simdutf
         zlib
+        libxkbcommon
 
         glslang
         spirv-cross
