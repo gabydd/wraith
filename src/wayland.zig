@@ -164,12 +164,12 @@ pub const App = struct {
         comptime action: apprt.Action.Key,
         value: apprt.Action.Value(action),
     ) !void {
-        _ = value; // autofix
         switch (action) {
             .new_window => _ = try self.newSurface(switch (target) {
                 .app => null,
                 .surface => |v| v,
             }),
+            .reload_config => try self.reloadConfig(target, value),
             .new_tab,
             .toggle_fullscreen,
             .size_limit,
@@ -178,7 +178,6 @@ pub const App = struct {
             .mouse_shape,
             .mouse_visibility,
             .open_config,
-            .reload_config,
 
             .new_split,
             .goto_split,
@@ -208,6 +207,42 @@ pub const App = struct {
             => log.info("unimplemented action={}", .{action}),
         }
     }
+
+    /// Reload the configuration. This should return the new configuration.
+    /// The old value can be freed immediately at this point assuming a
+    /// successful return.
+    ///
+    /// The returned pointer value is only valid for a stable self pointer.
+    fn reloadConfig(
+        self: *App,
+        target: apprt.action.Target,
+        opts: apprt.action.ReloadConfig,
+    ) !void {
+        if (opts.soft) {
+            switch (target) {
+                .app => try self.app.updateConfig(self, &self.config),
+                .surface => |core_surface| try core_surface.updateConfig(
+                    &self.config,
+                ),
+            }
+            return;
+        }
+
+        // Load our configuration
+        var config = try Config.load(self.app.alloc);
+        errdefer config.deinit();
+
+        // Call into our app to update
+        switch (target) {
+            .app => try self.app.updateConfig(self, &config),
+            .surface => |core_surface| try core_surface.updateConfig(&config),
+        }
+
+        // Update the existing config, be sure to clean up the old one.
+        self.config.deinit();
+        self.config = config;
+    }
+
     pub fn redrawSurface(self: *App, surface: *Surface) void {
         _ = self;
         _ = surface;
@@ -263,19 +298,33 @@ pub const App = struct {
     }
 };
 
-fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surface: *wl.Surface) void {
+fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surface: *Surface) void {
     switch (event) {
         .configure => |configure| {
+            const size = surface.getSize() catch |err| {
+                log.err("error querying window size for size callback err={}", .{err});
+                return;
+            };
+            surface.egl_window.resize(@intCast(size.width), @intCast(size.height), 0, 0);
+
+            // Call the primary callback.
+            surface.core_surface.sizeCallback(size) catch |err| {
+                log.err("error in size callback err={}", .{err});
+                return;
+            };
             xdg_surface.ackConfigure(configure.serial);
-            surface.commit();
+            surface.wl_surface.commit();
         },
     }
 }
 
-fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, running: *bool) void {
+fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, surface: *Surface) void {
     switch (event) {
-        .configure => {},
-        .close => running.* = false,
+        .configure => |configure| {
+            surface.width = @intCast(configure.width);
+            surface.height = @intCast(configure.height);
+        },
+        .close => surface.should_close = true,
     }
 }
 
@@ -290,11 +339,14 @@ pub const Surface = struct {
     xdg_surface: *xdg.Surface,
     xdg_toplevel: *xdg.Toplevel,
 
+    egl_window: *wl.EglWindow,
     egl_surface: *anyopaque,
     egl_context: ?*anyopaque,
 
     title_text: ?[:0]const u8,
     should_close: bool,
+    width: u32,
+    height: u32,
 
     pub fn init(self: *Surface, app: *App) !void {
         self.egl_context = null;
@@ -308,15 +360,17 @@ pub const Surface = struct {
         errdefer self.xdg_surface.destroy();
         self.xdg_toplevel = try self.xdg_surface.getToplevel();
         errdefer self.xdg_toplevel.destroy();
-        self.xdg_surface.setListener(*wl.Surface, xdgSurfaceListener, self.wl_surface);
-        self.xdg_toplevel.setListener(*bool, xdgToplevelListener, &self.should_close);
+        self.xdg_surface.setListener(*Surface, xdgSurfaceListener, self);
+        self.xdg_toplevel.setListener(*Surface, xdgToplevelListener, self);
 
-        const egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
+        self.egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
+        self.height = 500;
+        self.width = 500;
 
         self.egl_surface = egl.eglCreatePlatformWindowSurface(
             self.app.egl_display,
             self.app.egl_config,
-            @ptrCast(egl_window),
+            @ptrCast(self.egl_window),
             null,
         ) orelse switch (egl.eglGetError()) {
             egl.EGL_BAD_MATCH => return error.MismatchedConfig,
@@ -386,8 +440,7 @@ pub const Surface = struct {
     /// not match screen coordinate size but we should be able to convert
     /// back and forth using getContentScale.
     pub fn getSize(self: *const Surface) !apprt.SurfaceSize {
-        _ = self; // autofix
-        return apprt.SurfaceSize{ .width = 500, .height = 500 };
+        return apprt.SurfaceSize{ .width = self.width, .height = self.height };
     }
 
     /// Returns the cursor position in scaled pixels relative to the
@@ -496,5 +549,15 @@ pub const Surface = struct {
                 else => return error.FailedToMakeCurrent,
             }
         }
+    }
+
+    pub fn threadExit(self: *Surface) void {
+        gl.glad.unload();
+        _ = egl.eglMakeCurrent(
+            self.app.egl_display,
+            egl.EGL_NO_SURFACE,
+            egl.EGL_NO_SURFACE,
+            egl.EGL_NO_CONTEXT,
+        );
     }
 };
