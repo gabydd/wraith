@@ -27,16 +27,166 @@ const egl = @cImport({
     @cUndef("WL_EGL_PLATFORM");
 });
 
+const SurfaceMap = std.AutoArrayHashMap(u32, *Surface);
 const Context = struct {
     compositor: ?*wl.Compositor,
     wm_base: ?*xdg.WmBase,
+    surface_map: *SurfaceMap,
+    alloc: std.mem.Allocator,
 };
+
+const Seat = struct {
+    surface_map: *SurfaceMap,
+    surface: ?*Surface,
+};
+
+fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
+    _ = wl_pointer;
+    switch (event) {
+        .enter => |ev| {
+            const wl_surface = ev.surface orelse return;
+            const id = wl_surface.getId();
+            seat.surface = seat.surface_map.get(id);
+            const surface = seat.surface orelse return;
+            const x = ev.surface_x.toDouble();
+            const y = ev.surface_y.toDouble();
+            surface.core_surface.cursorPosCallback(.{
+                .x = @floatCast(x),
+                .y = @floatCast(y),
+            }, null) catch |err| {
+                log.err(
+                    "error in cursor pos callback err={}",
+                    .{err},
+                );
+                return;
+            };
+        },
+        .leave => {
+            seat.surface = null;
+            const surface = seat.surface orelse return;
+            surface.core_surface.cursorPosCallback(.{
+                .x = -1,
+                .y = -1,
+            }, null) catch |err| {
+                log.err(
+                    "error in cursor pos callback err={}",
+                    .{err},
+                );
+                return;
+            };
+        },
+        .motion => |ev| {
+            const surface = seat.surface orelse return;
+            const x = ev.surface_x.toDouble();
+            const y = ev.surface_y.toDouble();
+            surface.core_surface.cursorPosCallback(.{
+                .x = @floatCast(x),
+                .y = @floatCast(y),
+            }, null) catch |err| {
+                log.err(
+                    "error in cursor pos callback err={}",
+                    .{err},
+                );
+                return;
+            };
+        },
+        .button => |ev| {
+            const surface = seat.surface orelse return;
+
+            // https://github.com/torvalds/linux/blob/ccb98ccef0e543c2bd4ef1a72270461957f3d8d0/include/uapi/linux/input-event-codes.h#L343C1-L363C24
+            // #define BTN_MISC    0x100
+            // #define BTN_0       0x100
+            // #define BTN_1       0x101
+            // #define BTN_2       0x102
+            // #define BTN_3       0x103
+            // #define BTN_4       0x104
+            // #define BTN_5       0x105
+            // #define BTN_6       0x106
+            // #define BTN_7       0x107
+            // #define BTN_8       0x108
+            // #define BTN_9       0x109
+            //
+            // #define BTN_MOUSE   0x110
+            // #define BTN_LEFT    0x110
+            // #define BTN_RIGHT   0x111
+            // #define BTN_MIDDLE  0x112
+            // #define BTN_SIDE    0x113
+            // #define BTN_EXTRA   0x114
+            // #define BTN_FORWARD 0x115
+            // #define BTN_BACK    0x116
+            // #define BTN_TASK    0x117
+            const button: input.MouseButton = switch (ev.button) {
+                0x110 => .left,
+                0x111 => .right,
+                0x112 => .middle,
+                0x104 => .four,
+                0x105 => .five,
+                0x106 => .six,
+                0x107 => .seven,
+                0x108 => .eight,
+                0x109 => .nine,
+                else => .unknown,
+            };
+
+            const action: input.MouseButtonState = switch (ev.state) {
+                .pressed => .press,
+                .released => .release,
+                else => unreachable,
+            };
+            _ = surface.core_surface.mouseButtonCallback(action, button, .{}) catch |err| {
+                log.err("error in scroll callback err={}", .{err});
+                return;
+            };
+        },
+        .axis => |ev| {
+            const surface = seat.surface orelse return;
+            _ = surface;
+            _ = ev;
+        },
+    }
+}
+fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void {
+    _ = wl_keyboard;
+    _ = event;
+    _ = seat;
+}
+fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
+    switch (event) {
+        .capabilities => |ev| {
+            if (ev.capabilities.pointer) {
+                const wl_pointer = wl_seat.getPointer() catch {
+                    log.err("failed to allocate memory for wl_pointer object", .{});
+                    return;
+                };
+                wl_pointer.setListener(*Seat, pointerListener, seat);
+            }
+
+            if (ev.capabilities.keyboard) {
+                const wl_keyboard = wl_seat.getKeyboard() catch {
+                    log.err("failed to allocate memory for wl_keyboard object", .{});
+                    return;
+                };
+                wl_keyboard.setListener(*Seat, keyboardListener, seat);
+            }
+        },
+    }
+}
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
     switch (event) {
         .global => |global| {
             if (std.mem.orderZ(u8, global.interface, wl.Compositor.interface.name) == .eq) {
                 context.compositor = registry.bind(global.name, wl.Compositor, 1) catch return;
+            } else if (std.mem.orderZ(u8, global.interface, wl.Seat.interface.name) == .eq) {
+                const wl_seat = registry.bind(global.name, wl.Seat, 5) catch return;
+                const seat = context.alloc.create(Seat) catch return;
+                seat.surface_map = context.surface_map;
+                seat.surface = null;
+                wl_seat.setListener(
+                    *Seat,
+                    seatListener,
+                    seat,
+                );
             } else if (std.mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
                 context.wm_base = registry.bind(global.name, xdg.WmBase, 1) catch return;
             }
@@ -53,15 +203,20 @@ pub const App = struct {
 
     egl_display: ?*anyopaque,
     egl_config: *anyopaque,
+    surface_map: *SurfaceMap,
 
     pub const Options = struct {};
     pub fn init(core_app: *CoreApp, _: Options) !App {
         const display = try wl.Display.connect(null);
         const registry = try display.getRegistry();
+        const surface_map = try core_app.alloc.create(SurfaceMap);
+        surface_map.* = SurfaceMap.init(core_app.alloc);
 
         var context: Context = .{
             .compositor = null,
             .wm_base = null,
+            .surface_map = surface_map,
+            .alloc = core_app.alloc,
         };
         registry.setListener(*Context, registryListener, &context);
         if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
@@ -151,6 +306,7 @@ pub const App = struct {
             .egl_display = egl_display,
             .egl_config = egl_config,
             .display = display,
+            .surface_map = surface_map,
         };
     }
 
@@ -294,6 +450,8 @@ pub const App = struct {
             }
         }
 
+        const surface_id: u32 = surface.wl_surface.getId();
+        try self.surface_map.put(surface_id, surface);
         return surface;
     }
 };
@@ -451,6 +609,19 @@ pub const Surface = struct {
             .x = 0,
             .y = 0,
         };
+    }
+
+    pub fn supportsClipboard(
+        self: *const Surface,
+        clipboard_type: apprt.Clipboard,
+    ) bool {
+        _ = clipboard_type; // autofix
+        _ = self;
+        return false;
+        // return switch (clipboard_type) {
+        //     .standard => true,
+        //     .selection, .primary => comptime builtin.os.tag == .linux,
+        // };
     }
 
     /// Start an async clipboard request.
