@@ -22,6 +22,9 @@
         flake-compat.follows = "";
       };
     };
+    zls = {
+      url = "github:zigtools/zls/0.13.0";
+    };
   };
 
   outputs = {
@@ -29,6 +32,7 @@
     nixpkgs-unstable,
     nixpkgs-stable,
     zig,
+    zls,
     ...
   }:
     builtins.foldl' nixpkgs-stable.lib.recursiveUpdate {} (builtins.map (system: let
@@ -37,6 +41,7 @@
     in {
       devShell.${system} = pkgs-stable.callPackage ./nix/devShell.nix {
         zig = zig.packages.${system}."0.13.0";
+        zls = zls.packages.${system}.zls;
         wraptest = pkgs-stable.callPackage ./nix/wraptest.nix {};
       };
 

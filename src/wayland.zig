@@ -21,6 +21,7 @@ const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 
 const xkb = @import("xkbcommon");
+const Keysym = @import("Keysym.zig").Keysym;
 
 const gl = ghostty.gl;
 const egl = @cImport({
@@ -31,10 +32,12 @@ const egl = @cImport({
 });
 
 const SurfaceMap = std.AutoArrayHashMap(u32, *Surface);
+const SeatList = std.SinglyLinkedList(Seat);
 const Context = struct {
     compositor: ?*wl.Compositor,
     wm_base: ?*xdg.WmBase,
     surface_map: *SurfaceMap,
+    seats: *SeatList,
     alloc: std.mem.Allocator,
 };
 
@@ -226,83 +229,84 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             // keycode we must add 8.
             const keycode = ev.key + 8;
 
-            const keysym = xkb_state.keyGetOneSym(keycode);
+            const keysym: Keysym = @enumFromInt(@intFromEnum(xkb_state.keyGetOneSym(keycode)));
+            const lower: u21 = @intCast(keysym.toLower().toUTF32());
             if (keysym == .NoSymbol) return;
-            const KS = xkb.Keysym;
-            const key: input.Key = switch (@intFromEnum(keysym)) {
-                KS.a => .a,
-                KS.b => .b,
-                KS.c => .c,
-                KS.d => .d,
-                KS.e => .e,
-                KS.f => .f,
-                KS.g => .g,
-                KS.h => .h,
-                KS.i => .i,
-                KS.j => .j,
-                KS.k => .k,
-                KS.l => .l,
-                KS.m => .m,
-                KS.n => .n,
-                KS.o => .o,
-                KS.p => .p,
-                KS.q => .q,
-                KS.r => .r,
-                KS.s => .s,
-                KS.t => .t,
-                KS.u => .u,
-                KS.v => .v,
-                KS.w => .w,
-                KS.x => .x,
-                KS.y => .y,
-                KS.z => .z,
-                KS.@"0" => .zero,
-                KS.@"1" => .one,
-                KS.@"2" => .two,
-                KS.@"3" => .three,
-                KS.@"4" => .four,
-                KS.@"5" => .five,
-                KS.@"6" => .six,
-                KS.@"7" => .seven,
-                KS.@"8" => .eight,
-                KS.@"9" => .nine,
-                KS.Up => .up,
-                KS.Down => .down,
-                KS.Right => .right,
-                KS.Left => .left,
-                KS.Home => .home,
-                KS.End => .end,
-                KS.Page_Up => .page_up,
-                KS.Page_Down => .page_down,
-                KS.Escape => .escape,
+            const key: input.Key = switch (keysym) {
+                .a => .a,
+                .b => .b,
+                .c => .c,
+                .d => .d,
+                .e => .e,
+                .f => .f,
+                .g => .g,
+                .h => .h,
+                .i => .i,
+                .j => .j,
+                .k => .k,
+                .l => .l,
+                .m => .m,
+                .n => .n,
+                .o => .o,
+                .p => .p,
+                .q => .q,
+                .r => .r,
+                .s => .s,
+                .t => .t,
+                .u => .u,
+                .v => .v,
+                .w => .w,
+                .x => .x,
+                .y => .y,
+                .z => .z,
+                .@"0" => .zero,
+                .@"1" => .one,
+                .@"2" => .two,
+                .@"3" => .three,
+                .@"4" => .four,
+                .@"5" => .five,
+                .@"6" => .six,
+                .@"7" => .seven,
+                .@"8" => .eight,
+                .@"9" => .nine,
+                .Up => .up,
+                .Down => .down,
+                .Right => .right,
+                .Left => .left,
+                .Home => .home,
+                .End => .end,
+                .Page_Up => .page_up,
+                .Page_Down => .page_down,
+                .Escape => .escape,
 
-                KS.KP_Decimal => .kp_decimal,
-                KS.KP_Divide => .kp_divide,
-                KS.KP_Multiply => .kp_multiply,
-                KS.KP_Subtract => .kp_subtract,
-                KS.KP_Add => .kp_add,
-                KS.KP_Enter => .kp_enter,
-                KS.KP_Equal => .kp_equal,
-                KS.Dgrave_accent => .grave_accent,
-                KS.minus => .minus,
-                KS.equal => .equal,
-                KS.space => .space,
-                KS.semicolon => .semicolon,
-                KS.apostrophe => .apostrophe,
-                KS.comma => .comma,
-                KS.period => .period,
-                KS.slash => .slash,
-                KS.bracketleft => .left_bracket,
-                KS.bracketright => .right_bracket,
-                KS.backslash => .backslash,
-                KS.Return => .enter,
-                KS.Tab => .tab,
-                KS.BackSpace => .backspace,
-                KS.Delete => .delete,
+                .KP_Decimal => .kp_decimal,
+                .KP_Divide => .kp_divide,
+                .KP_Multiply => .kp_multiply,
+                .KP_Subtract => .kp_subtract,
+                .KP_Add => .kp_add,
+                .KP_Enter => .kp_enter,
+                .KP_Equal => .kp_equal,
+                .grave => .grave_accent,
+                .minus => .minus,
+                .equal => .equal,
+                .space => .space,
+                .semicolon => .semicolon,
+                .apostrophe => .apostrophe,
+                .comma => .comma,
+                .period => .period,
+                .slash => .slash,
+                .bracketleft => .left_bracket,
+                .bracketright => .right_bracket,
+                .backslash => .backslash,
+                .Return => .enter,
+                .Tab => .tab,
+                .BackSpace => .backspace,
+                .Delete => .delete,
                 else => .invalid,
             };
             var buf: [10]u8 = undefined;
-            const utf8_len = xkb_state.keyGetUtf8(keycode, &buf);
+            const utf32 = xkb_state.keyGetUtf32(keycode);
+            const utf8_len = if (utf32 < 0x20) 0 else xkb_state.keyGetUtf8(keycode, &buf);
             const utf8: []const u8 = buf[0..utf8_len];
             const key_event: input.KeyEvent = .{
                 .action = action,
@@ -312,7 +316,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .consumed_mods = .{},
                 .composing = false,
                 .utf8 = utf8,
-                .unshifted_codepoint = if (utf8.len > 0) @intCast(utf8[0]) else 0,
+                .unshifted_codepoint = lower,
             };
 
             const effect = surface.core_surface.keyCallback(key_event) catch |err| {
@@ -354,14 +358,15 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 context.compositor = registry.bind(global.name, wl.Compositor, 1) catch return;
             } else if (std.mem.orderZ(u8, global.interface, wl.Seat.interface.name) == .eq) {
                 const wl_seat = registry.bind(global.name, wl.Seat, 5) catch return;
-                const seat = context.alloc.create(Seat) catch return;
-                seat.surface_map = context.surface_map;
-                seat.surface = null;
-                seat.xkb_state = null;
+                const seat = context.alloc.create(SeatList.Node) catch return;
+                context.seats.prepend(seat);
+                seat.data.surface_map = context.surface_map;
+                seat.data.surface = null;
+                seat.data.xkb_state = null;
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
-                    seat,
+                    &seat.data,
                 );
             } else if (std.mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
                 context.wm_base = registry.bind(global.name, xdg.WmBase, 1) catch return;
@@ -376,23 +381,30 @@ pub const App = struct {
     display: *wl.Display,
     compositor: *wl.Compositor,
     wm_base: *xdg.WmBase,
+    registry: *wl.Registry,
 
     egl_display: ?*anyopaque,
     egl_config: *anyopaque,
     surface_map: *SurfaceMap,
+    seats: *SeatList,
 
     pub const Options = struct {};
     pub fn init(core_app: *CoreApp, _: Options) !App {
         const display = try wl.Display.connect(null);
         const registry = try display.getRegistry();
+
         const surface_map = try core_app.alloc.create(SurfaceMap);
         surface_map.* = SurfaceMap.init(core_app.alloc);
+
+        const seats = try core_app.alloc.create(SeatList);
+        seats.* = .{};
 
         var context: Context = .{
             .compositor = null,
             .wm_base = null,
             .surface_map = surface_map,
             .alloc = core_app.alloc,
+            .seats = seats,
         };
         registry.setListener(*Context, registryListener, &context);
         if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
@@ -479,15 +491,31 @@ pub const App = struct {
             .config = config,
             .compositor = compositor,
             .wm_base = wm_base,
+            .registry = registry,
             .egl_display = egl_display,
             .egl_config = egl_config,
             .display = display,
             .surface_map = surface_map,
+            .seats = seats,
         };
     }
 
     pub fn terminate(self: *App) void {
-        _ = self; // autofix
+        self.config.deinit();
+        self.deinit();
+        self.registry.destroy();
+        self.wm_base.destroy();
+        self.compositor.destroy();
+        self.display.disconnect();
+    }
+
+    fn deinit(self: *App) void {
+        self.surface_map.deinit();
+        self.app.alloc.destroy(self.surface_map);
+        while (self.seats.popFirst()) |seat| {
+            self.app.alloc.destroy(seat);
+        }
+        self.app.alloc.destroy(self.seats);
     }
 
     pub fn performAction(
@@ -639,10 +667,8 @@ pub const App = struct {
 fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surface: *Surface) void {
     switch (event) {
         .configure => |configure| {
-            const size = surface.getSize() catch |err| {
-                log.err("error querying window size for size callback err={}", .{err});
-                return;
-            };
+            xdg_surface.ackConfigure(configure.serial);
+            const size: apprt.SurfaceSize = .{ .width = surface.width, .height = surface.height };
             surface.egl_window.resize(@intCast(size.width), @intCast(size.height), 0, 0);
 
             // Call the primary callback.
@@ -650,7 +676,7 @@ fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surfa
                 log.err("error in size callback err={}", .{err});
                 return;
             };
-            xdg_surface.ackConfigure(configure.serial);
+            surface.configured = true;
             surface.wl_surface.commit();
         },
     }
@@ -685,12 +711,14 @@ pub const Surface = struct {
     should_close: bool,
     width: u32,
     height: u32,
+    configured: bool,
 
     pub fn init(self: *Surface, app: *App) !void {
         self.egl_context = null;
         self.title_text = null;
         self.app = app;
         self.should_close = false;
+        self.configured = false;
 
         self.wl_surface = try app.compositor.createSurface();
         errdefer self.wl_surface.destroy();
@@ -873,6 +901,7 @@ pub const Surface = struct {
     }
 
     pub fn swapBuffers(self: *Surface) !void {
+        if (!self.configured) return;
         if (egl.eglSwapBuffers(self.app.egl_display, self.egl_surface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_DISPLAY => return error.InvalidDisplay,

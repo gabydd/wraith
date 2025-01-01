@@ -1,4 +1,5 @@
 {
+  perf-tools,
   mkShell,
   lib,
   stdenv,
@@ -21,6 +22,7 @@
   wasmtime,
   wraptest,
   zig,
+  zls,
   zip,
   llvmPackages_latest,
   bzip2,
@@ -103,12 +105,14 @@ in
         pkg-config
         scdoc
         zig
+        zls
         zip
         wayland-scanner
         wayland-protocols
 
         # For web and wasm stuff
         nodejs
+        perf-tools
 
         # Linting
         nodePackages.prettier
