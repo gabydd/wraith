@@ -55,8 +55,10 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             const id = wl_surface.getId();
             seat.surface = seat.surface_map.get(id);
             const surface = seat.surface orelse return;
-            const x = ev.surface_x.toDouble();
-            const y = ev.surface_y.toDouble();
+            const x: f32 = @floatCast(ev.surface_x.toDouble());
+            const y: f32 = @floatCast(ev.surface_y.toDouble());
+            surface.cursor_x = x;
+            surface.cursor_y = y;
             surface.core_surface.cursorPosCallback(.{
                 .x = @floatCast(x),
                 .y = @floatCast(y),
@@ -71,6 +73,8 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         .leave => {
             seat.surface = null;
             const surface = seat.surface orelse return;
+            surface.cursor_x = -1;
+            surface.cursor_y = -1;
             surface.core_surface.cursorPosCallback(.{
                 .x = -1,
                 .y = -1,
@@ -84,11 +88,13 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .motion => |ev| {
             const surface = seat.surface orelse return;
-            const x = ev.surface_x.toDouble();
-            const y = ev.surface_y.toDouble();
+            const x: f32 = @floatCast(ev.surface_x.toDouble());
+            const y: f32 = @floatCast(ev.surface_y.toDouble());
+            surface.cursor_x = x;
+            surface.cursor_y = y;
             surface.core_surface.cursorPosCallback(.{
-                .x = @floatCast(x),
-                .y = @floatCast(y),
+                .x = x,
+                .y = y,
             }, null) catch |err| {
                 log.err(
                     "error in cursor pos callback err={}",
@@ -711,6 +717,8 @@ pub const Surface = struct {
     should_close: bool,
     width: u32,
     height: u32,
+    cursor_x: f32,
+    cursor_y: f32,
     configured: bool,
 
     pub fn init(self: *Surface, app: *App) !void {
@@ -719,6 +727,8 @@ pub const Surface = struct {
         self.app = app;
         self.should_close = false;
         self.configured = false;
+        self.cursor_x = -1;
+        self.cursor_y = -1;
 
         self.wl_surface = try app.compositor.createSurface();
         errdefer self.wl_surface.destroy();
@@ -812,10 +822,9 @@ pub const Surface = struct {
     /// Returns the cursor position in scaled pixels relative to the
     /// upper-left of the window.
     pub fn getCursorPos(self: *const Surface) !apprt.CursorPos {
-        _ = self; // autofix
         return apprt.CursorPos{
-            .x = 0,
-            .y = 0,
+            .x = self.cursor_x,
+            .y = self.cursor_y,
         };
     }
 
