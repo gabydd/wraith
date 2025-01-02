@@ -41,10 +41,19 @@ const Context = struct {
     alloc: std.mem.Allocator,
 };
 
+const ModIndex = struct {
+    shift: xkb.ModIndex,
+    ctrl: xkb.ModIndex,
+    alt: xkb.ModIndex,
+    super: xkb.ModIndex,
+    caps_lock: xkb.ModIndex,
+    num_lock: xkb.ModIndex,
+};
 const Seat = struct {
     surface_map: *SurfaceMap,
     surface: ?*Surface,
     xkb_state: ?*xkb.State,
+    mod_index: ModIndex,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -105,6 +114,7 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .button => |ev| {
             const surface = seat.surface orelse return;
+            const xkb_state = surface.xkb_state orelse return;
 
             // https://github.com/torvalds/linux/blob/ccb98ccef0e543c2bd4ef1a72270461957f3d8d0/include/uapi/linux/input-event-codes.h#L343C1-L363C24
             // #define BTN_MISC    0x100
@@ -146,7 +156,16 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
                 .released => .release,
                 else => unreachable,
             };
-            _ = surface.core_surface.mouseButtonCallback(action, button, .{}) catch |err| {
+            const components: xkb.State.Component = @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched);
+            const mods: input.Mods = .{
+                .shift = xkb_state.modIndexIsActive(surface.mod_index.shift, components) == 1,
+                .ctrl = xkb_state.modIndexIsActive(surface.mod_index.ctrl, components) == 1,
+                .alt = xkb_state.modIndexIsActive(surface.mod_index.alt, components) == 1,
+                .super = xkb_state.modIndexIsActive(surface.mod_index.super, components) == 1,
+                .num_lock = xkb_state.modIndexIsActive(surface.mod_index.num_lock, components) == 1,
+                .caps_lock = xkb_state.modIndexIsActive(surface.mod_index.caps_lock, components) == 1,
+            };
+            _ = surface.core_surface.mouseButtonCallback(action, button, mods) catch |err| {
                 log.err("error in scroll callback err={}", .{err});
                 return;
             };
@@ -165,6 +184,9 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             const wl_surface = ev.surface orelse return;
             const id = wl_surface.getId();
             seat.surface = seat.surface_map.get(id);
+            const surface = seat.surface orelse return;
+            surface.xkb_state = seat.xkb_state;
+            surface.mod_index = seat.mod_index;
             // It doesn't matter which surface gains keyboard focus or what keys are
             // currently pressed. We don't implement key repeat for simiplicity.
         },
@@ -205,9 +227,18 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 return;
             };
             defer state.unref();
+            seat.mod_index.shift = keymap.modGetIndex(xkb.names.mod.shift);
+            seat.mod_index.ctrl = keymap.modGetIndex(xkb.names.mod.ctrl);
+            seat.mod_index.alt = keymap.modGetIndex(xkb.names.mod.alt);
+            seat.mod_index.caps_lock = keymap.modGetIndex(xkb.names.mod.caps);
+            seat.mod_index.num_lock = keymap.modGetIndex(xkb.names.mod.num);
+            seat.mod_index.super = keymap.modGetIndex(xkb.names.mod.logo);
 
             if (seat.xkb_state) |s| s.unref();
             seat.xkb_state = state.ref();
+            const surface = seat.surface orelse return;
+            surface.xkb_state = seat.xkb_state;
+            surface.mod_index = seat.mod_index;
         },
         .modifiers => |ev| {
             if (seat.xkb_state) |xkb_state| {
@@ -223,17 +254,33 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
         },
         .key => |ev| {
             const surface = seat.surface orelse return;
-            const mods: input.Mods = .{};
             const action: input.Action = switch (ev.state) {
                 .released => .release,
                 .pressed => .press,
                 else => unreachable,
             };
             const xkb_state = seat.xkb_state orelse return;
+            const components: xkb.State.Component = @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched);
+            const mods: input.Mods = .{
+                .shift = xkb_state.modIndexIsActive(seat.mod_index.shift, components) == 1,
+                .ctrl = xkb_state.modIndexIsActive(seat.mod_index.ctrl, components) == 1,
+                .alt = xkb_state.modIndexIsActive(seat.mod_index.alt, components) == 1,
+                .super = xkb_state.modIndexIsActive(seat.mod_index.super, components) == 1,
+                .num_lock = xkb_state.modIndexIsActive(seat.mod_index.num_lock, components) == 1,
+                .caps_lock = xkb_state.modIndexIsActive(seat.mod_index.caps_lock, components) == 1,
+            };
 
             // The wayland protocol gives us an input event code. To convert this to an xkb
             // keycode we must add 8.
             const keycode = ev.key + 8;
+            const consumed_mods: input.Mods = .{
+                .shift = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.shift) == 1,
+                .ctrl = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.ctrl) == 1,
+                .alt = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.alt) == 1,
+                .super = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.super) == 1,
+                .num_lock = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.num_lock) == 1,
+                .caps_lock = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.caps_lock) == 1,
+            };
 
             const keysym: Keysym = @enumFromInt(@intFromEnum(xkb_state.keyGetOneSym(keycode)));
             const lower: u21 = @intCast(keysym.toLower().toUTF32());
@@ -319,7 +366,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .key = key,
                 .physical_key = key,
                 .mods = mods,
-                .consumed_mods = .{},
+                .consumed_mods = consumed_mods,
                 .composing = false,
                 .utf8 = utf8,
                 .unshifted_codepoint = lower,
@@ -720,6 +767,8 @@ pub const Surface = struct {
     cursor_x: f32,
     cursor_y: f32,
     configured: bool,
+    xkb_state: ?*xkb.State,
+    mod_index: ModIndex,
 
     pub fn init(self: *Surface, app: *App) !void {
         self.egl_context = null;
@@ -729,6 +778,7 @@ pub const Surface = struct {
         self.configured = false;
         self.cursor_x = -1;
         self.cursor_y = -1;
+        self.xkb_state = null;
 
         self.wl_surface = try app.compositor.createSurface();
         errdefer self.wl_surface.destroy();
