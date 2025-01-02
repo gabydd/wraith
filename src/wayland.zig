@@ -172,8 +172,21 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .axis => |ev| {
             const surface = seat.surface orelse return;
-            _ = surface;
-            _ = ev;
+            const value = ev.value.toDouble();
+            var xoff: f64 = 0;
+            var yoff: f64 = 0;
+            switch (ev.axis) {
+                .vertical_scroll => {
+                    yoff = -value;
+                },
+                .horizontal_scroll => {
+                    xoff = value;
+                },
+                else => unreachable,
+            }
+            surface.core_surface.scrollCallback(xoff, yoff, .{}) catch |err| {
+                log.err("error in scroll callback err={}", .{err});
+            };
         },
     }
 }
