@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
 
     scanner.generate("wl_compositor", 1);
-    scanner.generate("wl_seat", 1);
+    scanner.generate("wl_seat", 5);
 
     scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
     scanner.generate("xdg_wm_base", 1);

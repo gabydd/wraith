@@ -188,6 +188,13 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
                 log.err("error in scroll callback err={}", .{err});
             };
         },
+        .frame => {
+            // TODO make sure events are collected and then
+            // dispatched here
+        },
+        .axis_source => {},
+        .axis_discrete => {},
+        .axis_stop => {},
     }
 }
 fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void {
@@ -287,12 +294,12 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             // keycode we must add 8.
             const keycode = ev.key + 8;
             const consumed_mods: input.Mods = .{
-                .shift = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.shift) == 1,
-                .ctrl = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.ctrl) == 1,
-                .alt = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.alt) == 1,
-                .super = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.super) == 1,
-                .num_lock = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.num_lock) == 1,
-                .caps_lock = xkb_state.modIndexIsConsumed(keycode, seat.mod_index.caps_lock) == 1,
+                .shift = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.shift, .gtk) == 1,
+                .ctrl = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.ctrl, .gtk) == 1,
+                .alt = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.alt, .gtk) == 1,
+                .super = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.super, .gtk) == 1,
+                .num_lock = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.num_lock, .gtk) == 1,
+                .caps_lock = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.caps_lock, .gtk) == 1,
             };
 
             const keysym: Keysym = @enumFromInt(@intFromEnum(xkb_state.keyGetOneSym(keycode)));
@@ -368,11 +375,20 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .Tab => .tab,
                 .BackSpace => .backspace,
                 .Delete => .delete,
+
+                .Shift_L => .left_shift,
+                .Control_L => .left_control,
+                .Alt_L => .left_alt,
+                .Super_L => .left_super,
+                .Shift_R => .right_shift,
+                .Control_R => .right_control,
+                .Alt_R => .right_alt,
+                .Super_R => .right_super,
                 else => .invalid,
             };
-            var buf: [10]u8 = undefined;
-            const utf32 = xkb_state.keyGetUtf32(keycode);
-            const utf8_len = if (utf32 < 0x20) 0 else xkb_state.keyGetUtf8(keycode, &buf);
+            var buf: [3]u8 = undefined;
+            const utf32 = keysym.toUTF32();
+            const utf8_len: u3 = if (utf32 < 0x20) 0 else std.unicode.utf8Encode(@intCast(utf32), &buf) catch return;
             const utf8: []const u8 = buf[0..utf8_len];
             const key_event: input.KeyEvent = .{
                 .action = action,
@@ -393,10 +409,12 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             // Surface closed.
             if (effect == .closed) return;
         },
+        .repeat_info => |_| {},
     }
 }
 fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
     switch (event) {
+        .name => {},
         .capabilities => |ev| {
             if (ev.capabilities.pointer) {
                 const wl_pointer = wl_seat.getPointer() catch {
