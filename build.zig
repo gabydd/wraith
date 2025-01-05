@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("ghostty", ghostty.module("ghostty"));
 
     const xkbcommon = b.dependency("zig-xkbcommon", .{}).module("xkbcommon");
+    const libxev = b.dependency("libxev", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("xev");
 
     const scanner = Scanner.create(b, .{});
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
@@ -48,6 +52,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("EGL");
 
     exe.root_module.addImport("xkbcommon", xkbcommon);
+    exe.root_module.addImport("xev", libxev);
     exe.linkSystemLibrary("xkbcommon");
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

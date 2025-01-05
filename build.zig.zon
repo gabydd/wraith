@@ -16,6 +16,10 @@
             .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/d8412eed455c8cfea5b4cda2ea260095ccb47045.tar.gz",
             .hash = "12200989a0e5c5d8186dd16752e3d83d914d4f54ecca7b3e147443f13a9580ede671",
         },
+        .libxev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/db6a52bafadf00360e675fefa7926e8e6c0e9931.tar.gz",
+            .hash = "12206029de146b685739f69b10a6f08baee86b3d0a5f9a659fa2b2b66c9602078bbf",
+        },
     },
 
     .paths = .{

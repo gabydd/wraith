@@ -31,6 +31,8 @@ const egl = @cImport({
     @cUndef("WL_EGL_PLATFORM");
 });
 
+const xev = @import("xev");
+
 const SurfaceMap = std.AutoArrayHashMap(u32, *Surface);
 const SeatList = std.SinglyLinkedList(Seat);
 const Context = struct {
@@ -54,6 +56,8 @@ const Seat = struct {
     surface: ?*Surface,
     xkb_state: ?*xkb.State,
     mod_index: ModIndex,
+    repeat_rate: i32,
+    repeat_delay: i32,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -207,13 +211,10 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             const surface = seat.surface orelse return;
             surface.xkb_state = seat.xkb_state;
             surface.mod_index = seat.mod_index;
-            // It doesn't matter which surface gains keyboard focus or what keys are
-            // currently pressed. We don't implement key repeat for simiplicity.
+            surface.repeat_rate = seat.repeat_rate;
+            surface.repeat_delay = seat.repeat_delay;
         },
-        .leave => {
-            // There's nothing to do as we don't implement key repeat and
-            // only care about press events, not release.
-        },
+        .leave => {},
         .keymap => |ev| {
             defer posix.close(ev.fd);
 
@@ -386,9 +387,9 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .Super_R => .right_super,
                 else => .invalid,
             };
-            var buf: [3]u8 = undefined;
+            var buf: []u8 = surface.app.app.alloc.alloc(u8, 3) catch return;
             const utf32 = keysym.toUTF32();
-            const utf8_len: u3 = if (utf32 < 0x20) 0 else std.unicode.utf8Encode(@intCast(utf32), &buf) catch return;
+            const utf8_len: u3 = if (utf32 < 0x20) 0 else std.unicode.utf8Encode(@intCast(utf32), buf) catch return;
             const utf8: []const u8 = buf[0..utf8_len];
             const key_event: input.KeyEvent = .{
                 .action = action,
@@ -400,7 +401,28 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .utf8 = utf8,
                 .unshifted_codepoint = lower,
             };
-
+            if (surface.last_event) |last_event| surface.app.app.alloc.free(last_event.utf8.ptr[0..3]);
+            surface.last_event = key_event;
+            const timer = xev.Timer.init() catch unreachable;
+            if (action == .press and surface.repeat_rate > 0 and surface.repeat_delay > 0) {
+                timer.run(
+                    &surface.app.loop,
+                    &surface.app.timer_c,
+                    @intCast(surface.repeat_delay),
+                    Surface,
+                    surface,
+                    repeatCallback,
+                );
+            } else {
+                timer.cancel(
+                    &surface.app.loop,
+                    &surface.app.timer_c,
+                    &surface.app.timer_cancel_c,
+                    Surface,
+                    surface,
+                    repeatCallback,
+                );
+            }
             const effect = surface.core_surface.keyCallback(key_event) catch |err| {
                 log.err("error in key callback err={}", .{err});
                 return;
@@ -409,9 +431,39 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             // Surface closed.
             if (effect == .closed) return;
         },
-        .repeat_info => |_| {},
+        .repeat_info => |e| {
+            seat.repeat_rate = e.rate;
+            seat.repeat_delay = e.delay;
+        },
     }
 }
+fn repeatCallback(
+    ud: ?*Surface,
+    l: *xev.Loop,
+    c: *xev.Completion,
+    e: anyerror!void,
+) xev.CallbackAction {
+    _ = e catch return .disarm;
+    if (c.op == .timer_remove) return .disarm;
+    const surface = ud orelse return .disarm;
+    const key_event = surface.last_event orelse return .disarm;
+    _ = surface.core_surface.keyCallback(key_event) catch |err| {
+        log.err("error in key callback err={}", .{err});
+        return .disarm;
+    };
+    const timer = xev.Timer.init() catch unreachable;
+    timer.run(
+        l,
+        c,
+        @intCast(surface.repeat_rate),
+        Surface,
+        surface,
+        repeatCallback,
+    );
+
+    return .disarm;
+}
+
 fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
     switch (event) {
         .name => {},
@@ -447,6 +499,8 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 seat.data.surface_map = context.surface_map;
                 seat.data.surface = null;
                 seat.data.xkb_state = null;
+                seat.data.repeat_rate = 0;
+                seat.data.repeat_delay = 0;
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
@@ -471,6 +525,11 @@ pub const App = struct {
     egl_config: *anyopaque,
     surface_map: *SurfaceMap,
     seats: *SeatList,
+    loop: xev.Loop,
+    wake: xev.Async,
+    wake_c: xev.Completion = .{},
+    timer_c: xev.Completion = .{},
+    timer_cancel_c: xev.Completion = .{},
 
     pub const Options = struct {};
     pub fn init(core_app: *CoreApp, _: Options) !App {
@@ -570,6 +629,10 @@ pub const App = struct {
             .new_window = .{},
         }, .{ .forever = {} });
 
+        var loop = try xev.Loop.init(.{});
+        errdefer loop.deinit();
+        var wake = try xev.Async.init();
+        errdefer wake.deinit();
         return .{
             .app = core_app,
             .config = config,
@@ -581,6 +644,8 @@ pub const App = struct {
             .display = display,
             .surface_map = surface_map,
             .seats = seats,
+            .loop = loop,
+            .wake = wake,
         };
     }
 
@@ -701,25 +766,72 @@ pub const App = struct {
         // wayland doesn't support the inspector
     }
 
-    pub fn run(self: *App) !void {
-        _ = try self.app.tick(self);
-        while (true) {
-            const err = self.display.dispatch();
-            if (err != .SUCCESS) {
-                log.err("{}", .{err});
-                return error.DispatchFailed;
-            }
-
-            // Tick the terminal app
-            const should_quit = try self.app.tick(self);
-            if (should_quit or self.app.surfaces.items.len == 0) {
-                for (self.app.surfaces.items) |surface| {
-                    surface.close(false);
-                }
-
-                return;
-            }
+    fn tick(userdata: ?*App, l: *xev.Loop, c: *xev.Completion, r: anyerror!void) xev.CallbackAction {
+        _ = r catch |err| {
+            log.err("{}", .{err});
+            l.stop();
+            return .disarm;
+        };
+        _ = c; // autofix
+        const self = userdata orelse return .rearm;
+        const should_quit = self.app.tick(self) catch |err| {
+            log.err("{}", .{err});
+            l.stop();
+            return .disarm;
+        };
+        const err = self.display.dispatch();
+        if (err != .SUCCESS) {
+            log.err("{}", .{err});
+            l.stop();
+            return .disarm;
         }
+        if (should_quit or self.app.surfaces.items.len == 0) {
+            for (self.app.surfaces.items) |surface| {
+                surface.close(false);
+            }
+            l.stop();
+            return .disarm;
+        }
+        return .rearm;
+    }
+    pub fn run(self: *App) !void {
+        self.wake.wait(
+            &self.loop,
+            &self.wake_c,
+            App,
+            self,
+            tick,
+        );
+
+        var wayland_c: xev.Completion = .{};
+        const fd = self.display.getFd();
+        wayland_c = .{
+            .op = .{
+                .poll = .{
+                    .fd = fd,
+                },
+            },
+            .userdata = self,
+            .callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    return @call(.always_inline, tick, .{
+                        @as(*App, @ptrCast(@alignCast(ud))),
+                        l_inner,
+                        c_inner,
+                        if (r.poll) void{} else |err| err,
+                    });
+                }
+            }).callback,
+        };
+        self.loop.add(&wayland_c);
+        _ = try self.app.tick(self);
+        _ = self.display.flush();
+        try self.loop.run(.until_done);
     }
 
     pub fn wakeup(self: *App) void {
@@ -801,6 +913,10 @@ pub const Surface = struct {
     xkb_state: ?*xkb.State,
     mod_index: ModIndex,
 
+    repeat_rate: i32,
+    repeat_delay: i32,
+    last_event: ?input.KeyEvent,
+
     pub fn init(self: *Surface, app: *App) !void {
         self.egl_context = null;
         self.title_text = null;
@@ -810,6 +926,9 @@ pub const Surface = struct {
         self.cursor_x = -1;
         self.cursor_y = -1;
         self.xkb_state = null;
+        self.last_event = null;
+        self.repeat_rate = 0;
+        self.repeat_delay = 0;
 
         self.wl_surface = try app.compositor.createSurface();
         errdefer self.wl_surface.destroy();
@@ -856,6 +975,7 @@ pub const Surface = struct {
     }
     pub fn deinit(self: *Surface) void {
         if (self.title_text) |t| self.core_surface.alloc.free(t);
+        if (self.last_event) |last_event| self.app.app.alloc.free(last_event.utf8.ptr[0..3]);
 
         // Remove ourselves from the list of known surfaces in the app.
         self.app.app.deleteSurface(self);
