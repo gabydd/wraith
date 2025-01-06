@@ -55,6 +55,7 @@ const Seat = struct {
     surface_map: *SurfaceMap,
     surface: ?*Surface,
     xkb_state: ?*xkb.State,
+    xkb_keymap: ?*xkb.Keymap,
     mod_index: ModIndex,
     repeat_rate: i32,
     repeat_delay: i32,
@@ -84,7 +85,6 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             };
         },
         .leave => {
-            seat.surface = null;
             const surface = seat.surface orelse return;
             surface.cursor_x = -1;
             surface.cursor_y = -1;
@@ -214,7 +214,18 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             surface.repeat_rate = seat.repeat_rate;
             surface.repeat_delay = seat.repeat_delay;
         },
-        .leave => {},
+        .leave => {
+            const surface = seat.surface orelse return;
+            const timer = xev.Timer.init() catch unreachable;
+            timer.cancel(
+                &surface.app.loop,
+                &surface.app.timer_c,
+                &surface.app.timer_cancel_c,
+                Surface,
+                surface,
+                repeatCallback,
+            );
+        },
         .keymap => |ev| {
             defer posix.close(ev.fd);
 
@@ -257,6 +268,8 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
 
             if (seat.xkb_state) |s| s.unref();
             seat.xkb_state = state.ref();
+            if (seat.xkb_keymap) |k| k.unref();
+            seat.xkb_keymap = keymap.ref();
             const surface = seat.surface orelse return;
             surface.xkb_state = seat.xkb_state;
             surface.mod_index = seat.mod_index;
@@ -281,6 +294,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 else => unreachable,
             };
             const xkb_state = seat.xkb_state orelse return;
+            const xkb_keymap = seat.xkb_keymap orelse return;
             const components: xkb.State.Component = @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched);
             const mods: input.Mods = .{
                 .shift = xkb_state.modIndexIsActive(seat.mod_index.shift, components) == 1,
@@ -404,20 +418,21 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             if (surface.last_event) |last_event| surface.app.app.alloc.free(last_event.utf8.ptr[0..3]);
             surface.last_event = key_event;
             const timer = xev.Timer.init() catch unreachable;
-            if (action == .press and surface.repeat_rate > 0 and surface.repeat_delay > 0) {
-                timer.run(
-                    &surface.app.loop,
-                    &surface.app.timer_c,
-                    @intCast(surface.repeat_delay),
-                    Surface,
-                    surface,
-                    repeatCallback,
-                );
-            } else {
+            if (surface.app.timer_c.op == .timer) {
                 timer.cancel(
                     &surface.app.loop,
                     &surface.app.timer_c,
                     &surface.app.timer_cancel_c,
+                    Surface,
+                    surface,
+                    repeatCallback,
+                );
+            }
+            if (action == .press and surface.repeat_rate > 0 and surface.repeat_delay > 0 and xkb_keymap.keyRepeats(keycode) == 1) {
+                timer.run(
+                    &surface.app.loop,
+                    &surface.app.timer_c,
+                    @intCast(surface.repeat_delay),
                     Surface,
                     surface,
                     repeatCallback,
@@ -499,6 +514,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 seat.data.surface_map = context.surface_map;
                 seat.data.surface = null;
                 seat.data.xkb_state = null;
+                seat.data.xkb_keymap = null;
                 seat.data.repeat_rate = 0;
                 seat.data.repeat_delay = 0;
                 wl_seat.setListener(
@@ -834,8 +850,12 @@ pub const App = struct {
         try self.loop.run(.until_done);
     }
 
+    // not sure if this is actually needed haven't had
+    // problems with or without it
     pub fn wakeup(self: *App) void {
-        _ = self;
+        self.wake.notify() catch |err| {
+            log.err("error in wakeup err: {}", .{err});
+        };
     }
 
     pub fn newSurface(self: *App, parent_: ?*CoreSurface) !*Surface {
