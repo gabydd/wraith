@@ -443,7 +443,6 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                     repeatCallback,
                 );
             }
-            std.log.err("{}", .{key_event});
             const effect = surface.core_surface.keyCallback(key_event) catch |err| {
                 log.err("error in key callback err={}", .{err});
                 return;
@@ -695,6 +694,7 @@ pub const App = struct {
         self.surface_map.deinit();
         self.app.alloc.destroy(self.surface_map);
         while (self.seats.popFirst()) |seat| {
+            seat.data.wl_seat.destroy();
             self.app.alloc.destroy(seat);
         }
         self.app.alloc.destroy(self.seats);
@@ -812,16 +812,16 @@ pub const App = struct {
             l.stop();
             return .disarm;
         };
-        const err = self.display.dispatch();
-        if (err != .SUCCESS) {
-            log.err("{}", .{err});
-            l.stop();
-            return .disarm;
-        }
         if (should_quit or self.app.surfaces.items.len == 0) {
             for (self.app.surfaces.items) |surface| {
                 surface.close(false);
             }
+            l.stop();
+            return .disarm;
+        }
+        const err = self.display.dispatch();
+        if (err != .SUCCESS) {
+            log.err("{}", .{err});
             l.stop();
             return .disarm;
         }
@@ -929,7 +929,6 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
     switch (event) {
         .send => |ev| {
             const text = surface.clip_store orelse return;
-            std.log.err("clip request {s} with text {s}", .{ ev.mime_type, text });
             if (std.mem.orderZ(u8, ev.mime_type, "text/plain") == .eq or std.mem.orderZ(u8, ev.mime_type, "text/plain;charset=utf-8") == .eq) {
                 const file = xev.File.initFd(ev.fd);
                 const completion = surface.core_surface.alloc.create(xev.Completion) catch return;
@@ -943,9 +942,8 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
                         r: xev.File.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch |err| {
-                            std.log.err("clipboard write error {}", .{err});
+                            log.err("clipboard write error {}", .{err});
                         };
-                        std.log.err("written clip", .{});
                         std.posix.close(s.fd);
                         ud.?.core_surface.alloc.destroy(c);
                         return .disarm;
@@ -1146,13 +1144,10 @@ pub const Surface = struct {
         state: apprt.ClipboardRequest,
     ) !void {
         _ = clipboard_type; // autofix
-        std.log.err("request", .{});
         self.clip_req = state;
         if (self.clipboard_val) |clip| {
-            std.log.err("clip val {s}", .{clip});
             try self.core_surface.completeClipboardRequest(self.clip_req, clip, true);
         } else if (self.data_offer) |data_offer| {
-            std.log.err("has offer", .{});
             const in, const out = try std.posix.pipe();
             data_offer.receive("text/plain", out);
             posix.close(out);
@@ -1169,11 +1164,10 @@ pub const Surface = struct {
                     r: xev.File.ReadError!usize,
                 ) xev.CallbackAction {
                     const size = r catch |err| {
-                        std.log.err("clipboard read error {}", .{err});
+                        log.err("clipboard read error {}", .{err});
                         return .disarm;
                     };
                     const surface = ud.?;
-                    std.log.err("read clip", .{});
                     std.posix.close(s.fd);
                     const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
                     surface.core_surface.completeClipboardRequest(surface.clip_req, text, true) catch unreachable;
@@ -1199,11 +1193,11 @@ pub const Surface = struct {
         clipboard_type: apprt.Clipboard,
         confirm: bool,
     ) !void {
+        _ = clipboard_type; // autofix
         _ = confirm; // autofix
         if (self.clipboard_val) |clip_val| self.core_surface.alloc.free(clip_val);
         self.clipboard_val = null;
 
-        std.log.err("string {s} {}", .{ val, clipboard_type });
         if (self.clip_store) |clip_val| self.core_surface.alloc.free(clip_val);
         self.clip_store = try self.core_surface.alloc.dupeZ(u8, val);
         const wl_data_source = try self.app.device_manager.createDataSource();
@@ -1251,7 +1245,7 @@ pub const Surface = struct {
 
         const version = try gl.glad.load(egl.eglGetProcAddress);
         errdefer gl.glad.unload();
-        log.err("loaded OpenGL {}.{}", .{
+        log.info("loaded OpenGL {}.{}", .{
             gl.glad.versionMajor(@intCast(version)),
             gl.glad.versionMinor(@intCast(version)),
         });
