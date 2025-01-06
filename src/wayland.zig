@@ -38,6 +38,7 @@ const SeatList = std.SinglyLinkedList(Seat);
 const Context = struct {
     compositor: ?*wl.Compositor,
     wm_base: ?*xdg.WmBase,
+    device_manager: ?*wl.DataDeviceManager,
     surface_map: *SurfaceMap,
     seats: *SeatList,
     alloc: std.mem.Allocator,
@@ -59,6 +60,7 @@ const Seat = struct {
     mod_index: ModIndex,
     repeat_rate: i32,
     repeat_delay: i32,
+    wl_seat: *wl.Seat,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -213,6 +215,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             surface.mod_index = seat.mod_index;
             surface.repeat_rate = seat.repeat_rate;
             surface.repeat_delay = seat.repeat_delay;
+            surface.keyboard_serial = ev.serial;
         },
         .leave => {
             const surface = seat.surface orelse return;
@@ -517,6 +520,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 seat.data.xkb_keymap = null;
                 seat.data.repeat_rate = 0;
                 seat.data.repeat_delay = 0;
+                seat.data.wl_seat = wl_seat;
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
@@ -524,6 +528,8 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 );
             } else if (std.mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
                 context.wm_base = registry.bind(global.name, xdg.WmBase, 1) catch return;
+            } else if (std.mem.orderZ(u8, global.interface, wl.DataDeviceManager.interface.name) == .eq) {
+                context.device_manager = registry.bind(global.name, wl.DataDeviceManager, 3) catch return;
             }
         },
         .global_remove => {},
@@ -536,6 +542,8 @@ pub const App = struct {
     compositor: *wl.Compositor,
     wm_base: *xdg.WmBase,
     registry: *wl.Registry,
+    device_manager: *wl.DataDeviceManager,
+    data_device: *wl.DataDevice,
 
     egl_display: ?*anyopaque,
     egl_config: *anyopaque,
@@ -561,6 +569,7 @@ pub const App = struct {
         var context: Context = .{
             .compositor = null,
             .wm_base = null,
+            .device_manager = null,
             .surface_map = surface_map,
             .alloc = core_app.alloc,
             .seats = seats,
@@ -570,6 +579,9 @@ pub const App = struct {
 
         const compositor = context.compositor orelse return error.NoWlCompositor;
         const wm_base = context.wm_base orelse return error.NoXdgWmBase;
+        const device_manager = context.device_manager orelse return error.NoDataDeviceManager;
+        const first_seat = context.seats.first orelse return error.NoWlSeats;
+        const data_device = try device_manager.getDataDevice(first_seat.data.wl_seat);
         const egl_display = egl.eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, display, null);
         var egl_major: egl.EGLint = 0;
 
@@ -654,6 +666,8 @@ pub const App = struct {
             .config = config,
             .compositor = compositor,
             .wm_base = wm_base,
+            .device_manager = device_manager,
+            .data_device = data_device,
             .registry = registry,
             .egl_display = egl_display,
             .egl_config = egl_config,
@@ -908,6 +922,54 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, surface: *Su
     }
 }
 
+fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, surface: *Surface) void {
+    switch (event) {
+        .send => |ev| {
+            const text = surface.clipboard_val orelse return;
+            std.log.err("clip request {s} with text {s}", .{ ev.mime_type, text });
+            if (std.mem.orderZ(u8, ev.mime_type, "text/plain") == .eq or std.mem.orderZ(u8, ev.mime_type, "text/plain;charset=utf-8") == .eq) {
+                const file = xev.File.initFd(ev.fd);
+                const completion = surface.core_surface.alloc.create(xev.Completion) catch return;
+                file.write(&surface.app.loop, completion, .{ .slice = text }, Surface, surface, (struct {
+                    fn cb(
+                        ud: ?*Surface,
+                        _: *xev.Loop,
+                        c: *xev.Completion,
+                        s: xev.File,
+                        _: xev.WriteBuffer,
+                        r: xev.File.WriteError!usize,
+                    ) xev.CallbackAction {
+                        _ = r catch |err| {
+                            std.log.err("clipboard write error {}", .{err});
+                        };
+                        std.log.err("written clip", .{});
+                        std.posix.close(s.fd);
+                        ud.?.core_surface.alloc.destroy(c);
+                        return .disarm;
+                    }
+                }).cb);
+            }
+        },
+        .cancelled => {
+            data_source.destroy();
+            surface.clipboard_val = null;
+        },
+        else => {},
+    }
+}
+
+fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, surface: *Surface) void {
+    switch (event) {
+        .data_offer => {
+            // should inspect mime type
+        },
+        .selection => |ev| {
+            if (surface.data_offer) |data_offer| data_offer.destroy();
+            surface.data_offer = ev.id;
+        },
+        else => {},
+    }
+}
 pub const Surface = struct {
     /// The app we're part of
     app: *App,
@@ -919,11 +981,15 @@ pub const Surface = struct {
     xdg_surface: *xdg.Surface,
     xdg_toplevel: *xdg.Toplevel,
 
+    data_offer: ?*wl.DataOffer,
+    keyboard_serial: u32,
+
     egl_window: *wl.EglWindow,
     egl_surface: *anyopaque,
     egl_context: ?*anyopaque,
 
     title_text: ?[:0]const u8,
+    clipboard_val: ?[]const u8,
     should_close: bool,
     width: u32,
     height: u32,
@@ -936,10 +1002,13 @@ pub const Surface = struct {
     repeat_rate: i32,
     repeat_delay: i32,
     last_event: ?input.KeyEvent,
+    clip_req: apprt.ClipboardRequest,
 
     pub fn init(self: *Surface, app: *App) !void {
         self.egl_context = null;
         self.title_text = null;
+        self.clipboard_val = null;
+        self.data_offer = null;
         self.app = app;
         self.should_close = false;
         self.configured = false;
@@ -958,6 +1027,8 @@ pub const Surface = struct {
         errdefer self.xdg_toplevel.destroy();
         self.xdg_surface.setListener(*Surface, xdgSurfaceListener, self);
         self.xdg_toplevel.setListener(*Surface, xdgToplevelListener, self);
+
+        app.data_device.setListener(*Surface, dataDeviceListener, self);
 
         self.egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
         self.height = 500;
@@ -1054,12 +1125,8 @@ pub const Surface = struct {
         clipboard_type: apprt.Clipboard,
     ) bool {
         _ = clipboard_type; // autofix
-        _ = self;
-        return false;
-        // return switch (clipboard_type) {
-        //     .standard => true,
-        //     .selection, .primary => comptime builtin.os.tag == .linux,
-        // };
+        _ = self; // autofix
+        return true;
     }
 
     /// Start an async clipboard request.
@@ -1068,22 +1135,62 @@ pub const Surface = struct {
         clipboard_type: apprt.Clipboard,
         state: apprt.ClipboardRequest,
     ) !void {
-        _ = state; // autofix
         _ = clipboard_type; // autofix
-        _ = self; // autofix
+        std.log.err("request", .{});
+        if (self.data_offer) |data_offer| {
+            std.log.err("has offer", .{});
+            self.clip_req = state;
+            const in, const out = try std.posix.pipe();
+            data_offer.receive("text/plain", out);
+            _ = self.app.display.flush();
+            posix.close(out);
+            const file = xev.File.initFd(in);
+            const completion = self.core_surface.alloc.create(xev.Completion) catch return;
+            const read_buf = try self.core_surface.alloc.alloc(u8, 1024);
+            file.read(&self.app.loop, completion, .{ .slice = read_buf }, Surface, self, (struct {
+                fn cb(
+                    ud: ?*Surface,
+                    _: *xev.Loop,
+                    c: *xev.Completion,
+                    s: xev.File,
+                    b: xev.ReadBuffer,
+                    r: xev.File.ReadError!usize,
+                ) xev.CallbackAction {
+                    const size = r catch |err| {
+                        std.log.err("clipboard read error {}", .{err});
+                        return .disarm;
+                    };
+                    const surface = ud.?;
+                    std.log.err("read clip", .{});
+                    std.posix.close(s.fd);
+                    const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
+                    surface.core_surface.completeClipboardRequest(surface.clip_req, text, true) catch unreachable;
+                    surface.core_surface.alloc.free(text);
+                    surface.core_surface.alloc.destroy(c);
+                    surface.core_surface.alloc.free(b.slice);
+                    surface.data_offer.?.destroy();
+                    surface.data_offer = null;
+                    return .disarm;
+                }
+            }).cb);
+        }
     }
 
     /// Set the clipboard.
     pub fn setClipboardString(
-        self: *const Surface,
+        self: *Surface,
         val: [:0]const u8,
         clipboard_type: apprt.Clipboard,
         confirm: bool,
     ) !void {
         _ = confirm; // autofix
-        _ = clipboard_type; // autofix
-        _ = val; // autofix
-        _ = self; // autofix
+        std.log.err("string {s} {}", .{ val, clipboard_type });
+        self.clipboard_val = try self.core_surface.alloc.dupe(u8, val);
+        const wl_data_source = try self.app.device_manager.createDataSource();
+        wl_data_source.setListener(*Surface, dataSourceListener, self);
+        wl_data_source.offer("text/plain");
+        wl_data_source.offer("text/plain;charset=utf8");
+        self.app.data_device.setSelection(wl_data_source, self.keyboard_serial);
     }
 
     pub fn threadEnter(self: *Surface) !void {

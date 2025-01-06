@@ -41,6 +41,8 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wl_compositor", 1);
     scanner.generate("wl_seat", 5);
 
+    scanner.generate("wl_data_device_manager", 3);
+
     scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
     scanner.generate("xdg_wm_base", 1);
 
