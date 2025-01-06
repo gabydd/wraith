@@ -220,14 +220,16 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
         .leave => {
             const surface = seat.surface orelse return;
             const timer = xev.Timer.init() catch unreachable;
-            timer.cancel(
-                &surface.app.loop,
-                &surface.app.timer_c,
-                &surface.app.timer_cancel_c,
-                Surface,
-                surface,
-                repeatCallback,
-            );
+            if (!surface.app.loop.flags.stopped) {
+                timer.cancel(
+                    &surface.app.loop,
+                    &surface.app.timer_c,
+                    &surface.app.timer_cancel_c,
+                    Surface,
+                    surface,
+                    repeatCallback,
+                );
+            }
         },
         .keymap => |ev| {
             defer posix.close(ev.fd);
@@ -923,15 +925,15 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, surface: *Su
     }
 }
 
-fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, state: *Surface.SourceState) void {
+fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, surface: *Surface) void {
     switch (event) {
         .send => |ev| {
-            const surface = state.surface;
-            std.log.err("clip request {s} with text {s}", .{ ev.mime_type, state.val });
+            const text = surface.clip_store orelse return;
+            std.log.err("clip request {s} with text {s}", .{ ev.mime_type, text });
             if (std.mem.orderZ(u8, ev.mime_type, "text/plain") == .eq or std.mem.orderZ(u8, ev.mime_type, "text/plain;charset=utf-8") == .eq) {
                 const file = xev.File.initFd(ev.fd);
                 const completion = surface.core_surface.alloc.create(xev.Completion) catch return;
-                file.write(&surface.app.loop, completion, .{ .slice = state.val }, Surface, surface, (struct {
+                file.write(&surface.app.loop, completion, .{ .slice = text }, Surface, surface, (struct {
                     fn cb(
                         ud: ?*Surface,
                         _: *xev.Loop,
@@ -953,7 +955,6 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
         },
         .cancelled => {
             data_source.destroy();
-            state.surface.core_surface.alloc.destroy(state);
         },
         else => {},
     }
@@ -995,6 +996,7 @@ pub const Surface = struct {
 
     title_text: ?[:0]const u8,
     clipboard_val: ?[:0]const u8,
+    clip_store: ?[:0]const u8,
     should_close: bool,
     width: u32,
     height: u32,
@@ -1013,6 +1015,7 @@ pub const Surface = struct {
         self.egl_context = null;
         self.title_text = null;
         self.clipboard_val = null;
+        self.clip_store = null;
         self.data_offer = null;
         self.app = app;
         self.should_close = false;
@@ -1072,6 +1075,8 @@ pub const Surface = struct {
     pub fn deinit(self: *Surface) void {
         if (self.title_text) |t| self.core_surface.alloc.free(t);
         if (self.last_event) |last_event| self.app.app.alloc.free(last_event.utf8.ptr[0..3]);
+        if (self.clipboard_val) |val| self.core_surface.alloc.free(val);
+        if (self.clip_store) |val| self.core_surface.alloc.free(val);
 
         // Remove ourselves from the list of known surfaces in the app.
         self.app.app.deleteSurface(self);
@@ -1172,6 +1177,7 @@ pub const Surface = struct {
                     std.posix.close(s.fd);
                     const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
                     surface.core_surface.completeClipboardRequest(surface.clip_req, text, true) catch unreachable;
+                    if (surface.clipboard_val) |val| surface.core_surface.alloc.free(val);
                     surface.clipboard_val = text;
                     surface.core_surface.alloc.destroy(c);
                     surface.core_surface.alloc.free(b.slice);
@@ -1194,15 +1200,14 @@ pub const Surface = struct {
         confirm: bool,
     ) !void {
         _ = confirm; // autofix
+        if (self.clipboard_val) |clip_val| self.core_surface.alloc.free(clip_val);
+        self.clipboard_val = null;
+
         std.log.err("string {s} {}", .{ val, clipboard_type });
-        const clip_val = try self.core_surface.alloc.dupeZ(u8, val);
-        const state = try self.core_surface.alloc.create(SourceState);
-        state.* = .{
-            .surface = self,
-            .val = clip_val,
-        };
+        if (self.clip_store) |clip_val| self.core_surface.alloc.free(clip_val);
+        self.clip_store = try self.core_surface.alloc.dupeZ(u8, val);
         const wl_data_source = try self.app.device_manager.createDataSource();
-        wl_data_source.setListener(*SourceState, dataSourceListener, state);
+        wl_data_source.setListener(*Surface, dataSourceListener, self);
         wl_data_source.offer("text/plain");
         wl_data_source.offer("text/plain;charset=utf8");
         self.app.data_device.setSelection(wl_data_source, self.keyboard_serial);
