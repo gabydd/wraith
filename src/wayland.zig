@@ -20,6 +20,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 const zwp = wayland.client.zwp;
+const wp = wayland.client.wp;
 
 const xkb = @import("xkbcommon");
 const Keysym = @import("Keysym.zig").Keysym;
@@ -41,6 +42,7 @@ const Context = struct {
     wm_base: ?*xdg.WmBase,
     data_device_manager: ?*wl.DataDeviceManager,
     selection_device_manager: ?*zwp.PrimarySelectionDeviceManagerV1,
+    cursor_shape_manager: ?*wp.CursorShapeManagerV1,
     surface_map: *SurfaceMap,
     seats: *SeatList,
     alloc: std.mem.Allocator,
@@ -66,7 +68,6 @@ const Seat = struct {
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
-    _ = wl_pointer;
     switch (event) {
         .enter => |ev| {
             const wl_surface = ev.surface orelse return;
@@ -77,6 +78,8 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             const y: f32 = @floatCast(ev.surface_y.toDouble());
             surface.cursor_x = x;
             surface.cursor_y = y;
+            surface.cursor_shape_device = surface.app.cursor_shape_manager.getPointer(wl_pointer) catch null;
+            surface.pointer_serial = ev.serial;
             surface.core_surface.cursorPosCallback(.{
                 .x = @floatCast(x),
                 .y = @floatCast(y),
@@ -538,6 +541,8 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 context.data_device_manager = registry.bind(global.name, wl.DataDeviceManager, 3) catch return;
             } else if (std.mem.orderZ(u8, global.interface, zwp.PrimarySelectionDeviceManagerV1.interface.name) == .eq) {
                 context.selection_device_manager = registry.bind(global.name, zwp.PrimarySelectionDeviceManagerV1, 1) catch return;
+            } else if (std.mem.orderZ(u8, global.interface, wp.CursorShapeManagerV1.interface.name) == .eq) {
+                context.cursor_shape_manager = registry.bind(global.name, wp.CursorShapeManagerV1, 1) catch return;
             }
         },
         .global_remove => {},
@@ -554,6 +559,7 @@ pub const App = struct {
     selection_device_manager: *zwp.PrimarySelectionDeviceManagerV1,
     data_device: *wl.DataDevice,
     selection_device: *zwp.PrimarySelectionDeviceV1,
+    cursor_shape_manager: *wp.CursorShapeManagerV1,
 
     egl_display: ?*anyopaque,
     egl_config: *anyopaque,
@@ -581,6 +587,7 @@ pub const App = struct {
             .wm_base = null,
             .data_device_manager = null,
             .selection_device_manager = null,
+            .cursor_shape_manager = null,
             .surface_map = surface_map,
             .alloc = core_app.alloc,
             .seats = seats,
@@ -592,6 +599,7 @@ pub const App = struct {
         const wm_base = context.wm_base orelse return error.NoXdgWmBase;
         const data_device_manager = context.data_device_manager orelse return error.NoDataDeviceManager;
         const selection_device_manager = context.selection_device_manager orelse return error.NoSelectionDeviceManager;
+        const cursor_shape_manager = context.cursor_shape_manager orelse return error.NoCursorShapeManager;
         const first_seat = context.seats.first orelse return error.NoWlSeats;
         const data_device = try data_device_manager.getDataDevice(first_seat.data.wl_seat);
         const selection_device = try selection_device_manager.getDevice(first_seat.data.wl_seat);
@@ -683,6 +691,7 @@ pub const App = struct {
             .data_device = data_device,
             .selection_device_manager = selection_device_manager,
             .selection_device = selection_device,
+            .cursor_shape_manager = cursor_shape_manager,
             .registry = registry,
             .egl_display = egl_display,
             .egl_config = egl_config,
@@ -725,12 +734,16 @@ pub const App = struct {
                 .surface => |v| v,
             }),
             .reload_config => try self.reloadConfig(target, value),
+            .mouse_shape => switch (target) {
+                .app => {},
+                .surface => |v| v.rt_surface.setCursorShape(value),
+            },
+
             .new_tab,
             .toggle_fullscreen,
             .size_limit,
             .initial_size,
             .set_title,
-            .mouse_shape,
             .mouse_visibility,
             .open_config,
 
@@ -1050,6 +1063,9 @@ pub const Surface = struct {
     selection_offer: ?*zwp.PrimarySelectionOfferV1,
     keyboard_serial: u32,
 
+    cursor_shape_device: ?*wp.CursorShapeDeviceV1,
+    pointer_serial: u32,
+
     egl_window: *wl.EglWindow,
     egl_surface: *anyopaque,
     egl_context: ?*anyopaque,
@@ -1085,6 +1101,8 @@ pub const Surface = struct {
         self.selection_val = null;
         self.selection_store = null;
         self.selection_offer = null;
+
+        self.cursor_shape_device = null;
 
         self.app = app;
         self.should_close = false;
@@ -1142,6 +1160,7 @@ pub const Surface = struct {
         );
         errdefer self.core_surface.deinit();
     }
+
     pub fn deinit(self: *Surface) void {
         if (self.title_text) |t| self.core_surface.alloc.free(t);
         if (self.last_event) |last_event| self.app.app.alloc.free(last_event.utf8.ptr[0..3]);
@@ -1180,6 +1199,47 @@ pub const Surface = struct {
     /// Return the title of the window.
     pub fn getTitle(self: *Surface) ?[:0]const u8 {
         return self.title_text;
+    }
+    pub fn setCursorShape(self: *Surface, shape: ghostty.terminal.MouseShape) void {
+        if (self.cursor_shape_device) |device| {
+            const cursor_shape: wp.CursorShapeDeviceV1.Shape = switch (shape) {
+                .default => .default,
+                .context_menu => .context_menu,
+                .help => .help,
+                .pointer => .pointer,
+                .progress => .progress,
+                .wait => .wait,
+                .cell => .cell,
+                .crosshair => .crosshair,
+                .text => .text,
+                .vertical_text => .vertical_text,
+                .alias => .alias,
+                .copy => .copy,
+                .move => .move,
+                .no_drop => .no_drop,
+                .not_allowed => .not_allowed,
+                .grab => .grab,
+                .grabbing => .grabbing,
+                .all_scroll => .all_scroll,
+                .col_resize => .col_resize,
+                .row_resize => .row_resize,
+                .n_resize => .n_resize,
+                .e_resize => .e_resize,
+                .s_resize => .s_resize,
+                .w_resize => .w_resize,
+                .ne_resize => .ne_resize,
+                .nw_resize => .nw_resize,
+                .se_resize => .se_resize,
+                .sw_resize => .sw_resize,
+                .ew_resize => .ew_resize,
+                .ns_resize => .ns_resize,
+                .nesw_resize => .nesw_resize,
+                .nwse_resize => .nwse_resize,
+                .zoom_in => .zoom_in,
+                .zoom_out => .zoom_out,
+            };
+            device.setShape(self.pointer_serial, cursor_shape);
+        }
     }
     /// Returns the content scale for the created window.
     pub fn getContentScale(self: *const Surface) !apprt.ContentScale {

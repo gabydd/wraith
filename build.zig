@@ -46,6 +46,10 @@ pub fn build(b: *std.Build) void {
     scanner.addSystemProtocol("unstable/primary-selection/primary-selection-unstable-v1.xml");
     scanner.generate("zwp_primary_selection_device_manager_v1", 1);
 
+    scanner.addSystemProtocol("staging/cursor-shape/cursor-shape-v1.xml");
+    scanner.addSystemProtocol("stable/tablet/tablet-v2.xml");
+    scanner.generate("wp_cursor_shape_manager_v1", 1);
+
     scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
     scanner.generate("xdg_wm_base", 1);
 
