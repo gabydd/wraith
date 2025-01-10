@@ -43,6 +43,9 @@ pub fn build(b: *std.Build) void {
 
     scanner.generate("wl_data_device_manager", 3);
 
+    scanner.addSystemProtocol("unstable/primary-selection/primary-selection-unstable-v1.xml");
+    scanner.generate("zwp_primary_selection_device_manager_v1", 1);
+
     scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
     scanner.generate("xdg_wm_base", 1);
 
