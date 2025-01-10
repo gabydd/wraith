@@ -80,6 +80,12 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             surface.cursor_y = y;
             surface.cursor_shape_device = surface.app.cursor_shape_manager.getPointer(wl_pointer) catch null;
             surface.pointer_serial = ev.serial;
+            surface.core_surface.focusCallback(true) catch |err| {
+                log.err(
+                    "error in focus callback err={}",
+                    .{err},
+                );
+            };
             surface.core_surface.cursorPosCallback(.{
                 .x = @floatCast(x),
                 .y = @floatCast(y),
@@ -93,6 +99,12 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .leave => {
             const surface = seat.surface orelse return;
+            surface.core_surface.focusCallback(false) catch |err| {
+                log.err(
+                    "error in focus callback err={}",
+                    .{err},
+                );
+            };
             surface.cursor_x = -1;
             surface.cursor_y = -1;
             surface.core_surface.cursorPosCallback(.{
@@ -740,6 +752,10 @@ pub const App = struct {
                 .app => {},
                 .surface => |v| v.rt_surface.setCursorShape(value),
             },
+            .set_title => switch (target) {
+                .app => {},
+                .surface => |v| try v.rt_surface.setTitle(value.title),
+            },
 
             .quit => self.should_quit = true,
             .close_tab,
@@ -747,7 +763,6 @@ pub const App = struct {
             .toggle_fullscreen,
             .size_limit,
             .initial_size,
-            .set_title,
             .mouse_visibility,
             .open_config,
 
@@ -1130,6 +1145,8 @@ pub const Surface = struct {
         app.data_device.setListener(*Surface, dataDeviceListener, self);
         app.selection_device.setListener(*Surface, selectionDeviceListener, self);
 
+        self.xdg_toplevel.setAppId("com.mitchellh.ghostty");
+
         self.egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
         self.height = 500;
         self.width = 500;
@@ -1197,7 +1214,7 @@ pub const Surface = struct {
     fn setTitle(self: *Surface, slice: [:0]const u8) !void {
         if (self.title_text) |t| self.core_surface.alloc.free(t);
         self.title_text = try self.core_surface.alloc.dupeZ(u8, slice);
-        // TODO: actually set title
+        self.xdg_toplevel.setTitle(self.title_text.?);
     }
 
     /// Return the title of the window.
