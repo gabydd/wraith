@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     const ghostty = b.dependency("ghostty", .{
         .target = target,
         .optimize = optimize,
+        .@"app-runtime" = .none,
     });
     exe.root_module.addImport("ghostty", ghostty.module("ghostty"));
 

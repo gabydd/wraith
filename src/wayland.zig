@@ -571,6 +571,8 @@ pub const App = struct {
     timer_c: xev.Completion = .{},
     timer_cancel_c: xev.Completion = .{},
 
+    should_quit: bool = false,
+
     pub const Options = struct {};
     pub fn init(core_app: *CoreApp, _: Options) !App {
         const display = try wl.Display.connect(null);
@@ -739,6 +741,8 @@ pub const App = struct {
                 .surface => |v| v.rt_surface.setCursorShape(value),
             },
 
+            .quit => self.should_quit = true,
+            .close_tab,
             .new_tab,
             .toggle_fullscreen,
             .size_limit,
@@ -833,12 +837,12 @@ pub const App = struct {
         };
         _ = c; // autofix
         const self = userdata orelse return .rearm;
-        const should_quit = self.app.tick(self) catch |err| {
+        self.app.tick(self) catch |err| {
             log.err("{}", .{err});
             l.stop();
             return .disarm;
         };
-        if (should_quit or self.app.surfaces.items.len == 0) {
+        if (self.should_quit or self.app.surfaces.items.len == 0) {
             for (self.app.surfaces.items) |surface| {
                 surface.close(false);
             }
