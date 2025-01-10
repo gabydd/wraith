@@ -233,6 +233,12 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             surface.repeat_rate = seat.repeat_rate;
             surface.repeat_delay = seat.repeat_delay;
             surface.keyboard_serial = ev.serial;
+            surface.core_surface.focusCallback(true) catch |err| {
+                log.err(
+                    "error in focus callback err={}",
+                    .{err},
+                );
+            };
         },
         .leave => {
             const surface = seat.surface orelse return;
@@ -247,6 +253,12 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                     repeatCallback,
                 );
             }
+            surface.core_surface.focusCallback(false) catch |err| {
+                log.err(
+                    "error in focus callback err={}",
+                    .{err},
+                );
+            };
         },
         .keymap => |ev| {
             defer posix.close(ev.fd);
