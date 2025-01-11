@@ -505,10 +505,11 @@ fn repeatCallback(
         return .disarm;
     };
     const timer = xev.Timer.init() catch unreachable;
+    const repeat_time = @divFloor(1000, surface.repeat_rate);
     timer.run(
         l,
         c,
-        @intCast(surface.repeat_rate),
+        @intCast(repeat_time),
         Surface,
         surface,
         repeatCallback,
