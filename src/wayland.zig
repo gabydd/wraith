@@ -209,7 +209,7 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
                 },
                 else => unreachable,
             }
-            surface.core_surface.scrollCallback(xoff, yoff, .{}) catch |err| {
+            surface.core_surface.scrollCallback(xoff, yoff, .{ .precision = true }) catch |err| {
                 log.err("error in scroll callback err={}", .{err});
             };
         },
@@ -700,6 +700,9 @@ pub const App = struct {
                 }, .{ .forever = {} });
             }
         }
+        // We will use precision scrolling, but need a higher scroll multiplier than ghostty's
+        // default (which is tailored to macOS precision scroll)
+        config.@"mouse-scroll-multiplier" = config.@"mouse-scroll-multiplier" * 3;
 
         // Queue a single new window that starts on launch
         // Note: above we may send a quit so this may never happen
