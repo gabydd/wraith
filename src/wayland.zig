@@ -78,8 +78,10 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             const y: f32 = @floatCast(ev.surface_y.toDouble());
             surface.cursor_x = x;
             surface.cursor_y = y;
+            surface.wl_pointer = wl_pointer;
             surface.cursor_shape_device = surface.app.cursor_shape_manager.getPointer(wl_pointer) catch null;
             surface.pointer_serial = ev.serial;
+            surface.setCursorShape(surface.core_surface.io.terminal.mouse_shape);
             surface.core_surface.focusCallback(true) catch |err| {
                 log.err(
                     "error in focus callback err={}",
@@ -769,13 +771,17 @@ pub const App = struct {
                 .surface => |v| try v.rt_surface.setTitle(value.title),
             },
 
+            .mouse_visibility => switch (target) {
+                .app => {},
+                .surface => |v| v.rt_surface.setMouseVisibility(value),
+            },
+
             .quit => self.should_quit = true,
             .close_tab,
             .new_tab,
             .toggle_fullscreen,
             .size_limit,
             .initial_size,
-            .mouse_visibility,
             .open_config,
 
             .new_split,
@@ -1095,6 +1101,7 @@ pub const Surface = struct {
     keyboard_serial: u32,
 
     cursor_shape_device: ?*wp.CursorShapeDeviceV1,
+    wl_pointer: ?*wl.Pointer,
     pointer_serial: u32,
 
     egl_window: *wl.EglWindow,
@@ -1134,6 +1141,7 @@ pub const Surface = struct {
         self.selection_offer = null;
 
         self.cursor_shape_device = null;
+        self.wl_pointer = null;
 
         self.app = app;
         self.should_close = false;
@@ -1232,6 +1240,15 @@ pub const Surface = struct {
     /// Return the title of the window.
     pub fn getTitle(self: *Surface) ?[:0]const u8 {
         return self.title_text;
+    }
+
+    pub fn setMouseVisibility(self: *Surface, visibility: apprt.action.MouseVisibility) void {
+        if (self.wl_pointer) |pointer| {
+            switch (visibility) {
+                .hidden => pointer.setCursor(self.pointer_serial, null, 0, 0),
+                .visible => self.setCursorShape(self.core_surface.io.terminal.mouse_shape),
+            }
+        }
     }
     pub fn setCursorShape(self: *Surface, shape: ghostty.terminal.MouseShape) void {
         if (self.cursor_shape_device) |device| {
