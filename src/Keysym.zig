@@ -2598,4 +2598,13 @@ pub const Keysym = enum(u32) {
 
     extern fn xkb_keysym_to_lower(ks: Keysym) Keysym;
     pub const toLower = xkb_keysym_to_lower;
+
+    // https://codeberg.org/dnkl/foot/src/commit/7e7fd0468d860274c46030dcd43b2eadfb189f64/input.c#L1443-L1453
+    pub fn isModifier(keysym: Keysym) bool {
+        const val = @intFromEnum(keysym);
+        return (val >= @intFromEnum(Keysym.Shift_L) and val <= @intFromEnum(Keysym.Hyper_R)) or
+            (val >= @intFromEnum(Keysym.ISO_Lock) and val <= @intFromEnum(Keysym.ISO_Last_Group_Lock)) or
+            // keysym == Keysym.Mode_switch or
+            keysym == Keysym.Num_Lock;
+    }
 };

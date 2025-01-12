@@ -329,7 +329,26 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .pressed => .press,
                 else => unreachable,
             };
+
             const xkb_state = seat.xkb_state orelse return;
+            const keycode = ev.key + 8;
+            const keysym: Keysym = @enumFromInt(@intFromEnum(xkb_state.keyGetOneSym(keycode)));
+
+            // If we have a modifier, we need to manually update xkb state now so that we can
+            // properly report kitty protocol and internal Ghostty core expectations. If a modifier
+            // is pressed, we must report that the modifier is active. Wayland delivers these events
+            // sequentially and with the press first.
+            //
+            // See https://codeberg.org/dnkl/foot/src/commit/7e7fd0468d860274c46030dcd43b2eadfb189f64/input.c#L1144-L1187
+            if (keysym.isModifier()) {
+                const direction: xkb.KeyDirection = switch (action) {
+                    .release => .up,
+                    .press => .down,
+                    else => unreachable,
+                };
+                _ = xkb_state.updateKey(keycode, direction);
+            }
+
             const xkb_keymap = seat.xkb_keymap orelse return;
             const components: xkb.State.Component = @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched);
             const mods: input.Mods = .{
@@ -343,7 +362,6 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
 
             // The wayland protocol gives us an input event code. To convert this to an xkb
             // keycode we must add 8.
-            const keycode = ev.key + 8;
             const consumed_mods: input.Mods = .{
                 .shift = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.shift, .gtk) == 1,
                 .ctrl = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.ctrl, .gtk) == 1,
@@ -353,7 +371,6 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .caps_lock = xkb_state.modIndexIsConsumed2(keycode, seat.mod_index.caps_lock, .gtk) == 1,
             };
 
-            const keysym: Keysym = @enumFromInt(@intFromEnum(xkb_state.keyGetOneSym(keycode)));
             const lower: u21 = @intCast(keysym.toLower().toUTF32());
             if (keysym == .NoSymbol) return;
             const key: input.Key = switch (keysym.toLower()) {
