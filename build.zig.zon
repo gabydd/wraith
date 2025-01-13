@@ -5,8 +5,8 @@
 
     .dependencies = .{
         .ghostty = .{
-            .url = "https://github.com/gabydd/ghostty/archive/78ef584991fb285a5d3c7f95291f3fb2ccdee976.tar.gz",
-            .hash = "1220678340b77566c8db6fa2b7f3cea670825ab57bf2b42c7e5e2a53d7cb8730e985",
+            .url = "https://github.com/gabydd/ghostty/archive/89a78c05122ca01ed5ec36663a80a3de50744c70.tar.gz",
+            .hash = "1220aa8f7dea4b91bc710c9ea8b080af04b955a56f4b6b6f73abbac141cbcef9d38e",
         },
         .@"zig-wayland" = .{
             .url = "https://codeberg.org/ifreund/zig-wayland/archive/a5e2e9b6a6d7fba638ace4d4b24a3b576a02685b.tar.gz",
@@ -19,6 +19,11 @@
         .libxev = .{
             .url = "https://github.com/mitchellh/libxev/archive/db6a52bafadf00360e675fefa7926e8e6c0e9931.tar.gz",
             .hash = "12206029de146b685739f69b10a6f08baee86b3d0a5f9a659fa2b2b66c9602078bbf",
+        },
+        // must be kept up to date with ghostty
+        .iterm2_themes = .{
+            .url = "https://github.com/mbadolato/iTerm2-Color-Schemes/archive/25cb3c3f52c7011cd8a599f8d144fc63f4409eb6.tar.gz",
+            .hash = "1220dc1096bda9721c1f5256177539bf37b41ac6fb70d58eadf0eec45359676382e5",
         },
     },
 

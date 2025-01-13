@@ -245,7 +245,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
         .leave => {
             const surface = seat.surface orelse return;
             const timer = xev.Timer.init() catch unreachable;
-            if (!surface.app.loop.flags.stopped) {
+            if (!surface.app.loop.flags.stopped and surface.app.timer_c.op == .timer) {
                 timer.cancel(
                     &surface.app.loop,
                     &surface.app.timer_c,
@@ -498,7 +498,10 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
             if (surface.last_event) |last_event| surface.app.app.alloc.free(last_event.utf8.ptr[0..3]);
             surface.last_event = key_event;
             const timer = xev.Timer.init() catch unreachable;
-            if (surface.app.timer_c.op == .timer) {
+
+            // HACK: this causes extra stuff sometimes on io_uring need to look into it more
+            const epoll_dead = if (xev.backend == .epoll) surface.app.timer_c.state() != .dead else true;
+            if (surface.app.timer_c.op == .timer and epoll_dead) {
                 timer.cancel(
                     &surface.app.loop,
                     &surface.app.timer_c,
@@ -532,6 +535,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
         },
     }
 }
+
 fn repeatCallback(
     ud: ?*Surface,
     l: *xev.Loop,
@@ -539,7 +543,8 @@ fn repeatCallback(
     e: anyerror!void,
 ) xev.CallbackAction {
     _ = e catch return .disarm;
-    if (c.op == .timer_remove) return .disarm;
+    const cancel = if (xev.backend == .epoll) c.op == .cancel else c.op == .timer_remove;
+    if (cancel) return .disarm;
     const surface = ud orelse return .disarm;
     const key_event = surface.last_event orelse return .disarm;
     _ = surface.core_surface.keyCallback(key_event) catch |err| {
@@ -949,7 +954,10 @@ pub const App = struct {
         const fd = self.display.getFd();
         wayland_c = .{
             .op = .{
-                .poll = .{
+                .poll = if (xev.backend == .epoll) .{
+                    .fd = fd,
+                    .events = std.posix.POLL.IN,
+                } else .{
                     .fd = fd,
                 },
             },
