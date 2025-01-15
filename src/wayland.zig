@@ -82,12 +82,6 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             surface.cursor_shape_device = surface.app.cursor_shape_manager.getPointer(wl_pointer) catch null;
             surface.pointer_serial = ev.serial;
             surface.setCursorShape(surface.core_surface.io.terminal.mouse_shape);
-            surface.core_surface.focusCallback(true) catch |err| {
-                log.err(
-                    "error in focus callback err={}",
-                    .{err},
-                );
-            };
             surface.core_surface.cursorPosCallback(.{
                 .x = @floatCast(x),
                 .y = @floatCast(y),
@@ -101,12 +95,6 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .leave => {
             const surface = seat.surface orelse return;
-            surface.core_surface.focusCallback(false) catch |err| {
-                log.err(
-                    "error in focus callback err={}",
-                    .{err},
-                );
-            };
             surface.cursor_x = -1;
             surface.cursor_y = -1;
             surface.core_surface.cursorPosCallback(.{
