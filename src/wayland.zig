@@ -682,6 +682,9 @@ pub const App = struct {
         const egl_display = egl.eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, display, null);
         var egl_major: egl.EGLint = 0;
 
+        data_device.setListener(*Seat, dataDeviceListener, &first_seat.data);
+        selection_device.setListener(*Seat, selectionDeviceListener, &first_seat.data);
+
         var egl_minor: egl.EGLint = 0;
         if (egl.eglInitialize(egl_display, &egl_major, &egl_minor) == egl.EGL_TRUE) {
             log.info("EGL version: {}.{}", .{ egl_major, egl_minor });
@@ -1107,12 +1110,13 @@ fn selectionSourceListener(selection_source: *zwp.PrimarySelectionSourceV1, even
     }
 }
 
-fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, surface: *Surface) void {
+fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, seat: *Seat) void {
     switch (event) {
         .data_offer => {
             // should inspect mime type
         },
         .selection => |ev| {
+            const surface = seat.surface orelse return;
             if (surface.data_offer) |data_offer| data_offer.destroy();
             surface.data_offer = ev.id;
             if (surface.clipboard_val) |val| {
@@ -1124,12 +1128,13 @@ fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, surface: *S
     }
 }
 
-fn selectionDeviceListener(_: *zwp.PrimarySelectionDeviceV1, event: zwp.PrimarySelectionDeviceV1.Event, surface: *Surface) void {
+fn selectionDeviceListener(_: *zwp.PrimarySelectionDeviceV1, event: zwp.PrimarySelectionDeviceV1.Event, seat: *Seat) void {
     switch (event) {
         .data_offer => {
             // should inspect mime type
         },
         .selection => |ev| {
+            const surface = seat.surface orelse return;
             if (surface.selection_offer) |selection_offer| selection_offer.destroy();
             surface.selection_offer = ev.id;
             if (surface.selection_val) |val| {
@@ -1216,9 +1221,6 @@ pub const Surface = struct {
         self.xdg_surface.setListener(*Surface, xdgSurfaceListener, self);
         self.xdg_toplevel.setListener(*Surface, xdgToplevelListener, self);
 
-        app.data_device.setListener(*Surface, dataDeviceListener, self);
-        app.selection_device.setListener(*Surface, selectionDeviceListener, self);
-
         self.xdg_toplevel.setAppId("com.mitchellh.ghostty");
 
         self.egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
@@ -1274,6 +1276,9 @@ pub const Surface = struct {
         self.xdg_toplevel.destroy();
         self.xdg_surface.destroy();
         self.wl_surface.destroy();
+        if (self.app.seats.first) |seat| {
+            seat.data.surface = null;
+        }
     }
     pub fn shouldClose(self: *Surface) bool {
         return self.should_close;
