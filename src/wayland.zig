@@ -1241,7 +1241,8 @@ pub const Surface = struct {
         self.xdg_surface.setListener(*Surface, xdgSurfaceListener, self);
         self.xdg_toplevel.setListener(*Surface, xdgToplevelListener, self);
 
-        self.xdg_toplevel.setAppId("com.mitchellh.ghostty");
+        const app_id = app.config.class orelse "com.mitchellh.ghostty";
+        self.xdg_toplevel.setAppId(app_id);
 
         self.egl_window = try wl.EglWindow.create(self.wl_surface, 500, 500);
         self.height = 500;
