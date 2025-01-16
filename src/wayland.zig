@@ -68,6 +68,7 @@ const Seat = struct {
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
+    log.debug("pointer_listener: {s}", .{@tagName(event)});
     switch (event) {
         .enter => |ev| {
             const wl_surface = ev.surface orelse return;
@@ -211,6 +212,7 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
     }
 }
 fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void {
+    log.debug("keyboard_listener: {s}", .{@tagName(event)});
     _ = wl_keyboard;
     switch (event) {
         .enter => |ev| {
@@ -554,6 +556,7 @@ fn repeatCallback(
 }
 
 fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
+    log.debug("seat_listener: {s}", .{@tagName(event)});
     switch (event) {
         .name => {},
         .capabilities => |ev| {
@@ -577,6 +580,7 @@ fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
 }
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
+    log.debug("registry_listener: {s}", .{@tagName(event)});
     switch (event) {
         .global => |global| {
             if (std.mem.orderZ(u8, global.interface, wl.Compositor.interface.name) == .eq) {
@@ -1006,6 +1010,7 @@ pub const App = struct {
 };
 
 fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surface: *Surface) void {
+    log.debug("xdg_surface_listener: {s}", .{@tagName(event)});
     switch (event) {
         .configure => |configure| {
             xdg_surface.ackConfigure(configure.serial);
@@ -1024,6 +1029,7 @@ fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surfa
 }
 
 fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, surface: *Surface) void {
+    log.debug("xdg_toplevel_listener: {s}", .{@tagName(event)});
     switch (event) {
         .configure => |configure| {
             surface.width = @intCast(configure.width);
@@ -1034,6 +1040,7 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, surface: *Su
 }
 
 fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, surface: *Surface) void {
+    log.debug("data_source_listener: {s}", .{@tagName(event)});
     switch (event) {
         .send => |ev| {
             const text = surface.clip_store orelse return;
@@ -1067,6 +1074,7 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
 }
 
 fn selectionSourceListener(selection_source: *zwp.PrimarySelectionSourceV1, event: zwp.PrimarySelectionSourceV1.Event, surface: *Surface) void {
+    log.debug("selection_source_listener: {s}", .{@tagName(event)});
     switch (event) {
         .send => |ev| {
             const text = surface.selection_store orelse return;
