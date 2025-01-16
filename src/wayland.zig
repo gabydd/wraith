@@ -848,7 +848,6 @@ pub const App = struct {
             .quit_timer,
             .secure_input,
             .key_sequence,
-            .desktop_notification,
             .mouse_over_link,
             .cell_size,
             .renderer_health,
@@ -856,6 +855,18 @@ pub const App = struct {
             .pwd,
             .config_change,
             => log.info("unimplemented action={}", .{action}),
+
+            .desktop_notification => {
+                const argv: []const []const u8 = &.{
+                    "notify-send",
+                    "--icon",
+                    "com.mitchellh.ghostty",
+                    value.title,
+                    value.body,
+                };
+                var process = std.process.Child.init(argv, self.app.alloc);
+                _ = try process.spawnAndWait();
+            },
         }
     }
 
