@@ -857,17 +857,23 @@ pub const App = struct {
             => log.info("unimplemented action={}", .{action}),
 
             .desktop_notification => {
-                const argv: []const []const u8 = &.{
-                    "notify-send",
-                    "--icon",
-                    "com.mitchellh.ghostty",
-                    value.title,
-                    value.body,
-                };
-                var process = std.process.Child.init(argv, self.app.alloc);
-                _ = try process.spawnAndWait();
+                self.showDesktopNotification(value);
             },
         }
+    }
+
+    fn showDesktopNotification(self: *App, n: apprt.action.DesktopNotification) void {
+        const argv: []const []const u8 = &.{
+            "notify-send",
+            "--icon",
+            "com.mitchellh.ghostty",
+            n.title,
+            n.body,
+        };
+        var process = std.process.Child.init(argv, self.app.alloc);
+        _ = process.spawnAndWait() catch |err| {
+            log.err("Couldn't spawn notify-send got err: {}", .{err});
+        };
     }
 
     /// Reload the configuration. This should return the new configuration.
