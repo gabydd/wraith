@@ -65,6 +65,7 @@ const Seat = struct {
     repeat_rate: i32,
     repeat_delay: i32,
     wl_seat: *wl.Seat,
+    wl_keyboard: ?*wl.Keyboard,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -575,12 +576,16 @@ fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
                 };
                 wl_pointer.setListener(*Seat, pointerListener, seat);
             }
-
+            if (seat.wl_keyboard) |keyboard| {
+                keyboard.destroy();
+                seat.wl_keyboard = null;
+            }
             if (ev.capabilities.keyboard) {
                 const wl_keyboard = wl_seat.getKeyboard() catch {
                     log.err("failed to allocate memory for wl_keyboard object", .{});
                     return;
                 };
+                seat.wl_keyboard = wl_keyboard;
                 wl_keyboard.setListener(*Seat, keyboardListener, seat);
             }
         },
@@ -604,6 +609,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 seat.data.repeat_rate = 0;
                 seat.data.repeat_delay = 0;
                 seat.data.wl_seat = wl_seat;
+                seat.data.wl_keyboard = null;
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
