@@ -432,6 +432,7 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .backslash => .backslash,
                 .Return => .enter,
                 .Tab => .tab,
+                .ISO_Left_Tab => .tab,
                 .BackSpace => .backspace,
                 .Delete => .delete,
                 .Insert => .insert,
@@ -1554,7 +1555,7 @@ pub const Surface = struct {
                 const wl_data_source = try self.app.data_device_manager.createDataSource();
                 wl_data_source.setListener(*Surface, dataSourceListener, self);
                 wl_data_source.offer("text/plain");
-                wl_data_source.offer("text/plain;charset=utf8");
+                wl_data_source.offer("text/plain;charset=utf-8");
                 self.app.data_device.setSelection(wl_data_source, self.keyboard_serial);
             },
             .selection, .primary => {
@@ -1566,7 +1567,7 @@ pub const Surface = struct {
                 const zwp_selection_source = try self.app.selection_device_manager.createSource();
                 zwp_selection_source.setListener(*Surface, selectionSourceListener, self);
                 zwp_selection_source.offer("text/plain");
-                zwp_selection_source.offer("text/plain;charset=utf8");
+                zwp_selection_source.offer("text/plain;charset=utf-8");
                 self.app.selection_device.setSelection(zwp_selection_source, self.keyboard_serial);
             },
         }
