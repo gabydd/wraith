@@ -235,17 +235,14 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
         },
         .leave => {
             const surface = seat.surface orelse return;
-            if (surface.repeat_timer_active) {
-                surface.repeat_timer.?.cancel(
-                    &surface.app.loop,
-                    &surface.repeat_timer_completion,
-                    &surface.repeat_timer_cancel,
-                    Surface,
-                    surface,
-                    repeatCallback,
-                );
-                surface.repeat_timer_active = false;
-            }
+            surface.repeat_timer.cancel(
+                &surface.app.loop,
+                &surface.repeat_timer_completion,
+                &surface.repeat_timer_cancel,
+                Surface,
+                surface,
+                repeatCallback,
+            );
             surface.core_surface.focusCallback(false) catch |err| {
                 log.err(
                     "error in focus callback err={}",
@@ -473,9 +470,9 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .F24 => .f24,
                 else => .invalid,
             };
-            var buf: []u8 = surface.app.app.alloc.alloc(u8, 3) catch return;
+            var buf: [4]u8 = undefined;
             const utf32 = keysym.toUTF32();
-            const utf8_len: u3 = if (utf32 < 0x20) 0 else std.unicode.utf8Encode(@intCast(utf32), buf) catch return;
+            const utf8_len: u3 = if (utf32 < 0x20) 0 else std.unicode.utf8Encode(@intCast(utf32), &buf) catch return;
             const utf8: []const u8 = buf[0..utf8_len];
             const key_event: input.KeyEvent = .{
                 .action = action,
@@ -488,10 +485,14 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                 .unshifted_codepoint = lower,
             };
 
-            if (surface.last_event) |last_event| surface.app.app.alloc.free(last_event.utf8.ptr[0..3]);
-            surface.last_event = key_event;
-            if (surface.repeat_timer_active) {
-                surface.repeat_timer.?.cancel(
+            const effect = surface.core_surface.keyCallback(key_event) catch |err| {
+                log.err("error in key callback err={}", .{err});
+                return;
+            };
+
+            if (effect == .closed) {
+                // cancel the timer
+                surface.repeat_timer.cancel(
                     &surface.app.loop,
                     &surface.repeat_timer_completion,
                     &surface.repeat_timer_cancel,
@@ -499,26 +500,34 @@ fn keyboardListener(wl_keyboard: *wl.Keyboard, event: wl.Keyboard.Event, seat: *
                     surface,
                     repeatCallback,
                 );
-                surface.repeat_timer_active = false;
+                return;
             }
 
-            const effect = surface.core_surface.keyCallback(key_event) catch |err| {
-                log.err("error in key callback err={}", .{err});
-                return;
-            };
+            if (surface.pressed_key) |pressed_key| {
+                surface.app.app.alloc.free(pressed_key.utf8);
+            }
+            surface.pressed_key = null;
 
-            if (effect == .closed or action == .release) return;
-
-            if (surface.repeat_rate > 0 and surface.repeat_delay > 0 and xkb_keymap.keyRepeats(keycode) == 1) {
-                surface.repeat_timer.?.run(
+            // If the key should repeat, and it is a press we start the timer and save the event.
+            if (action == .press and
+                surface.repeat_rate > 0 and
+                surface.repeat_delay > 0 and
+                xkb_keymap.keyRepeats(keycode) == 1)
+            {
+                // Dupe the text since we only used a temporary buffer up above
+                const duped_utf8 = surface.app.app.alloc.dupe(u8, key_event.utf8) catch return;
+                surface.pressed_key = key_event;
+                surface.pressed_key.?.utf8 = duped_utf8;
+                // Reset cancels any ongoing timers
+                surface.repeat_timer.reset(
                     &surface.app.loop,
                     &surface.repeat_timer_completion,
+                    &surface.repeat_timer_cancel,
                     @intCast(surface.repeat_delay),
                     Surface,
                     surface,
                     repeatCallback,
                 );
-                surface.repeat_timer_active = true;
             }
         },
         .repeat_info => |e| {
@@ -539,23 +548,22 @@ fn repeatCallback(
     if (cancel) return .disarm;
 
     const surface = ud orelse return .disarm;
-    const key_event = surface.last_event orelse return .disarm;
+    const key_event = surface.pressed_key orelse return .disarm;
 
     const effect = surface.core_surface.keyCallback(key_event) catch |err| {
         log.err("error in key callback err={}", .{err});
-        surface.repeat_timer_active = false;
         return .disarm;
     };
 
     if (effect == .closed) {
-        surface.repeat_timer_active = false;
         return .disarm;
     }
 
     const repeat_time = @divFloor(1000, surface.repeat_rate);
-    surface.repeat_timer.?.run(
+    surface.repeat_timer.reset(
         l,
-        c,
+        &surface.repeat_timer_completion,
+        &surface.repeat_timer_cancel,
         @intCast(repeat_time),
         Surface,
         surface,
@@ -1222,13 +1230,12 @@ pub const Surface = struct {
     xkb_state: ?*xkb.State,
     mod_index: ModIndex,
 
-    repeat_timer: ?xev.Timer,
+    repeat_timer: xev.Timer,
     repeat_timer_completion: xev.Completion,
     repeat_timer_cancel: xev.Completion,
-    repeat_timer_active: bool,
     repeat_rate: i32,
     repeat_delay: i32,
-    last_event: ?input.KeyEvent,
+    pressed_key: ?input.KeyEvent,
     clip_req: apprt.ClipboardRequest,
     selection_req: apprt.ClipboardRequest,
 
@@ -1253,7 +1260,7 @@ pub const Surface = struct {
         self.cursor_x = -1;
         self.cursor_y = -1;
         self.xkb_state = null;
-        self.last_event = null;
+        self.pressed_key = null;
         self.repeat_rate = 0;
         self.repeat_delay = 0;
 
@@ -1294,9 +1301,8 @@ pub const Surface = struct {
         defer config.deinit();
 
         self.repeat_timer = try xev.Timer.init();
-        self.repeat_timer_completion = undefined;
-        self.repeat_timer_active = false;
-        self.repeat_timer_cancel = undefined;
+        self.repeat_timer_completion = .{};
+        self.repeat_timer_cancel = .{};
 
         // Initialize our surface now that we have the stable pointer.
         try self.core_surface.init(
@@ -1311,7 +1317,7 @@ pub const Surface = struct {
 
     pub fn deinit(self: *Surface) void {
         if (self.title_text) |t| self.core_surface.alloc.free(t);
-        if (self.last_event) |last_event| self.app.app.alloc.free(last_event.utf8.ptr[0..3]);
+        if (self.pressed_key) |last_event| self.app.app.alloc.free(last_event.utf8);
         if (self.clipboard_val) |val| self.core_surface.alloc.free(val);
         if (self.clip_store) |val| self.core_surface.alloc.free(val);
 
@@ -1321,19 +1327,15 @@ pub const Surface = struct {
         // Remove ourselves from the list of known surfaces in the app.
         self.app.app.deleteSurface(self);
 
-        if (self.repeat_timer) |timer| {
-            if (self.repeat_timer_active) {
-                timer.cancel(
-                    &self.app.loop,
-                    &self.repeat_timer_completion,
-                    &self.repeat_timer_cancel,
-                    Surface,
-                    self,
-                    repeatCallback,
-                );
-            }
-            timer.deinit();
-        }
+        self.repeat_timer.cancel(
+            &self.app.loop,
+            &self.repeat_timer_completion,
+            &self.repeat_timer_cancel,
+            Surface,
+            self,
+            repeatCallback,
+        );
+        self.repeat_timer.deinit();
 
         // Clean up our core surface so that all the rendering and IO stop.
         self.core_surface.deinit();
