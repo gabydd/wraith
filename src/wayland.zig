@@ -953,6 +953,30 @@ pub const App = struct {
         // wayland doesn't support the inspector
     }
 
+    fn appTick(userdata: ?*App, l: *xev.Loop, _: *xev.Completion, r: anyerror!void) xev.CallbackAction {
+        _ = r catch |err| {
+            log.err("{}", .{err});
+            l.stop();
+            return .disarm;
+        };
+        const self = userdata orelse return .rearm;
+
+        self.app.tick(self) catch |err| {
+            log.err("{}", .{err});
+            l.stop();
+            return .disarm;
+        };
+
+        if (self.should_quit or self.app.surfaces.items.len == 0) {
+            for (self.app.surfaces.items) |surface| {
+                surface.close(false);
+            }
+            l.stop();
+            return .disarm;
+        }
+        return .rearm;
+    }
+
     fn tick(userdata: ?*App, l: *xev.Loop, _: *xev.Completion, r: anyerror!void) xev.CallbackAction {
         _ = r catch |err| {
             log.err("{}", .{err});
@@ -1000,7 +1024,7 @@ pub const App = struct {
             &self.wake_c,
             App,
             self,
-            tick,
+            appTick,
         );
 
         var wayland_c: xev.Completion = .{};
