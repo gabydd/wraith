@@ -5,8 +5,8 @@
 
     .dependencies = .{
         .ghostty = .{
-            .url = "https://github.com/gabydd/ghostty/archive/89a78c05122ca01ed5ec36663a80a3de50744c70.tar.gz",
-            .hash = "1220aa8f7dea4b91bc710c9ea8b080af04b955a56f4b6b6f73abbac141cbcef9d38e",
+            .url = "https://github.com/gabydd/ghostty/archive/a1964e525c08fbdf3da1086268410831561a3123.tar.gz",
+            .hash = "1220b13e06f522dcd93627928ef9a09cbdb20e1fed2739663302e10a1100d648fb8c",
         },
         .@"zig-wayland" = .{
             .url = "https://codeberg.org/ifreund/zig-wayland/archive/a5e2e9b6a6d7fba638ace4d4b24a3b576a02685b.tar.gz",

@@ -6,7 +6,7 @@ const posix = std.posix;
 
 const cli = ghostty.cli;
 const input = ghostty.input;
-const internal_os = ghostty.internal_os;
+const internal_os = ghostty.os;
 const renderer = ghostty.renderer;
 const terminal = ghostty.terminal;
 const Renderer = renderer.Renderer;
@@ -824,7 +824,7 @@ pub const App = struct {
         target: apprt.Target,
         comptime action: apprt.Action.Key,
         value: apprt.Action.Value(action),
-    ) !void {
+    ) !bool {
         switch (action) {
             .new_window => _ = try self.newSurface(switch (target) {
                 .app => null,
@@ -843,6 +843,10 @@ pub const App = struct {
             .mouse_visibility => switch (target) {
                 .app => {},
                 .surface => |v| v.rt_surface.setMouseVisibility(value),
+            },
+
+            .desktop_notification => {
+                self.showDesktopNotification(value);
             },
 
             .quit => self.should_quit = true,
@@ -877,12 +881,13 @@ pub const App = struct {
             .color_change,
             .pwd,
             .config_change,
-            => log.info("unimplemented action={}", .{action}),
-
-            .desktop_notification => {
-                self.showDesktopNotification(value);
+            .toggle_maximize,
+            => {
+                log.info("unimplemented action={}", .{action});
+                return false;
             },
         }
+        return true;
     }
 
     fn showDesktopNotification(self: *App, n: apprt.action.DesktopNotification) void {
@@ -1658,5 +1663,11 @@ pub const Surface = struct {
             egl.EGL_NO_SURFACE,
             egl.EGL_NO_CONTEXT,
         );
+    }
+
+    pub fn defaultTermioEnv(self: *Surface) !?std.process.EnvMap {
+        const alloc = self.app.app.alloc;
+        const env = try internal_os.getEnvMap(alloc);
+        return env;
     }
 };
