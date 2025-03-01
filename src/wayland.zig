@@ -66,6 +66,12 @@ const Seat = struct {
     repeat_delay: i32,
     wl_seat: *wl.Seat,
     wl_keyboard: ?*wl.Keyboard,
+
+    axis_source: ?wl.Pointer.AxisSource,
+    axis_y: f64,
+    axis_x: f64,
+    axis_discrete_y: i32,
+    axis_discrete_x: i32,
 };
 
 fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat) void {
@@ -186,29 +192,55 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
             };
         },
         .axis => |ev| {
-            const surface = seat.surface orelse return;
+            const source = seat.axis_source orelse return;
+            if (source == wl.Pointer.AxisSource.wheel) {
+                // We ignore wheel events in axis. We will handle these in axis_discrete
+                return;
+            }
             const value = ev.value.toDouble();
-            var xoff: f64 = 0;
-            var yoff: f64 = 0;
             switch (ev.axis) {
-                .vertical_scroll => {
-                    yoff = -value;
-                },
-                .horizontal_scroll => {
-                    xoff = value;
-                },
+                .vertical_scroll => seat.axis_y += value,
+                .horizontal_scroll => seat.axis_x += value,
                 else => unreachable,
             }
-            surface.core_surface.scrollCallback(xoff, yoff, .{ .precision = true }) catch |err| {
+        },
+        .frame => {
+            const surface = seat.surface orelse return;
+            if (seat.axis_y == 0 and seat.axis_x == 0 and
+                seat.axis_discrete_y == 0 and seat.axis_discrete_x == 0) return;
+            defer {
+                seat.axis_x = 0;
+                seat.axis_y = 0;
+                seat.axis_discrete_y = 0;
+                seat.axis_discrete_x = 0;
+            }
+
+            const discrete_multiplier = 120;
+            const continuous_multiplier = 10;
+
+            const scroll_y: f64 = blk: {
+                const discrete_y: f64 = @floatFromInt(seat.axis_discrete_y);
+                break :blk discrete_y * discrete_multiplier + seat.axis_y * continuous_multiplier;
+            };
+            const scroll_x: f64 = blk: {
+                const discrete_x: f64 = @floatFromInt(seat.axis_discrete_x);
+                break :blk discrete_x * discrete_multiplier + seat.axis_x * continuous_multiplier;
+            };
+            surface.core_surface.scrollCallback(scroll_x, -scroll_y, .{ .precision = true }) catch |err| {
                 log.err("error in scroll callback err={}", .{err});
             };
         },
-        .frame => {
-            // TODO make sure events are collected and then
-            // dispatched here
+        .axis_source => |ev| seat.axis_source = ev.axis_source,
+
+        .axis_discrete => |ev| {
+            const source = seat.axis_source orelse return;
+            if (source != wl.Pointer.AxisSource.wheel) return;
+            switch (ev.axis) {
+                .vertical_scroll => seat.axis_discrete_y += ev.discrete,
+                .horizontal_scroll => seat.axis_discrete_y += ev.discrete,
+                else => unreachable,
+            }
         },
-        .axis_source => {},
-        .axis_discrete => {},
         .axis_stop => {},
     }
 }
@@ -611,14 +643,29 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 const wl_seat = registry.bind(global.name, wl.Seat, 5) catch return;
                 const seat = context.alloc.create(SeatList.Node) catch return;
                 context.seats.prepend(seat);
-                seat.data.surface_map = context.surface_map;
-                seat.data.surface = null;
-                seat.data.xkb_state = null;
-                seat.data.xkb_keymap = null;
-                seat.data.repeat_rate = 0;
-                seat.data.repeat_delay = 0;
-                seat.data.wl_seat = wl_seat;
-                seat.data.wl_keyboard = null;
+                seat.data = .{
+                    .surface_map = context.surface_map,
+                    .surface = null,
+                    .xkb_state = null,
+                    .xkb_keymap = null,
+                    .repeat_rate = 0,
+                    .repeat_delay = 0,
+                    .wl_seat = wl_seat,
+                    .wl_keyboard = null,
+                    .axis_discrete_y = 0,
+                    .axis_discrete_x = 0,
+                    .axis_y = 0,
+                    .axis_x = 0,
+                    .axis_source = null,
+                    .mod_index = .{
+                        .shift = 0,
+                        .ctrl = 0,
+                        .alt = 0,
+                        .super = 0,
+                        .caps_lock = 0,
+                        .num_lock = 0,
+                    },
+                };
                 wl_seat.setListener(
                     *Seat,
                     seatListener,
@@ -765,9 +812,6 @@ pub const App = struct {
                 }, .{ .forever = {} });
             }
         }
-        // We will use precision scrolling, but need a higher scroll multiplier than ghostty's
-        // default (which is tailored to macOS precision scroll)
-        config.@"mouse-scroll-multiplier" = config.@"mouse-scroll-multiplier" * 3;
 
         // Queue a single new window that starts on launch
         // Note: above we may send a quit so this may never happen
