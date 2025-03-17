@@ -1239,8 +1239,8 @@ fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, seat: *Seat
             const surface = seat.surface orelse return;
             if (surface.data_offer) |data_offer| data_offer.destroy();
             surface.data_offer = ev.id;
-            if (surface.clipboard_val) |val| {
-                surface.core_surface.alloc.free(val);
+            if (surface.clipboard_val) |*val| {
+                val.deinit(surface.core_surface.alloc);
             }
             surface.clipboard_val = null;
         },
@@ -1257,8 +1257,8 @@ fn selectionDeviceListener(_: *zwp.PrimarySelectionDeviceV1, event: zwp.PrimaryS
             const surface = seat.surface orelse return;
             if (surface.selection_offer) |selection_offer| selection_offer.destroy();
             surface.selection_offer = ev.id;
-            if (surface.selection_val) |val| {
-                surface.core_surface.alloc.free(val);
+            if (surface.selection_val) |*val| {
+                val.deinit(surface.core_surface.alloc);
             }
             surface.selection_val = null;
         },
@@ -1288,8 +1288,8 @@ pub const Surface = struct {
     egl_context: ?*anyopaque,
 
     title_text: ?[:0]const u8,
-    clipboard_val: ?[:0]const u8,
-    selection_val: ?[:0]const u8,
+    clipboard_val: ?std.ArrayListUnmanaged(u8),
+    selection_val: ?std.ArrayListUnmanaged(u8),
     clip_store: ?[:0]const u8,
     selection_store: ?[:0]const u8,
     should_close: bool,
@@ -1387,13 +1387,14 @@ pub const Surface = struct {
     }
 
     pub fn deinit(self: *Surface) void {
-        if (self.title_text) |t| self.core_surface.alloc.free(t);
-        if (self.pressed_key) |last_event| self.app.app.alloc.free(last_event.utf8);
-        if (self.clipboard_val) |val| self.core_surface.alloc.free(val);
-        if (self.clip_store) |val| self.core_surface.alloc.free(val);
+        const alloc = self.core_surface.alloc;
+        if (self.title_text) |t| alloc.free(t);
+        if (self.pressed_key) |last_event| alloc.free(last_event.utf8);
+        if (self.clipboard_val) |*val| val.deinit(alloc);
+        if (self.clip_store) |val| alloc.free(val);
 
-        if (self.selection_val) |val| self.core_surface.alloc.free(val);
-        if (self.selection_store) |val| self.core_surface.alloc.free(val);
+        if (self.selection_val) |*val| val.deinit(alloc);
+        if (self.selection_store) |val| alloc.free(val);
 
         // Remove ourselves from the list of known surfaces in the app.
         self.app.app.deleteSurface(self);
@@ -1529,7 +1530,7 @@ pub const Surface = struct {
             .standard => {
                 self.clip_req = state;
                 if (self.clipboard_val) |clip| {
-                    try self.core_surface.completeClipboardRequest(self.clip_req, clip, true);
+                    try self.core_surface.completeClipboardRequest(self.clip_req, clip.items[0 .. clip.items.len - 1 :0], true);
                 } else if (self.data_offer) |data_offer| {
                     const in, const out = try std.posix.pipe();
                     data_offer.receive("text/plain", out);
@@ -1537,6 +1538,7 @@ pub const Surface = struct {
                     const file = xev.File.initFd(in);
                     const completion = self.core_surface.alloc.create(xev.Completion) catch return;
                     const read_buf = try self.core_surface.alloc.alloc(u8, 1024);
+                    self.clipboard_val = .empty;
                     file.read(&self.app.loop, completion, .{ .slice = read_buf }, Surface, self, (struct {
                         fn cb(
                             ud: ?*Surface,
@@ -1546,21 +1548,43 @@ pub const Surface = struct {
                             b: xev.ReadBuffer,
                             r: xev.ReadError!usize,
                         ) xev.CallbackAction {
-                            const size = r catch |err| {
-                                log.err("clipboard read error {}", .{err});
+                            const surface = ud.?;
+                            var cleanup = false;
+                            defer if (cleanup) {
+                                surface.clipboard_val.?.deinit(surface.core_surface.alloc);
+                                surface.clipboard_val = null;
+                                surface.core_surface.alloc.destroy(c);
+                                surface.core_surface.alloc.free(b.slice);
+                                surface.data_offer.?.destroy();
+                                surface.data_offer = null;
+                            };
+                            const size = r catch |err| blk: {
+                                if (err != error.EOF) {
+                                    log.err("clipboard read error {}", .{err});
+                                    cleanup = true;
+                                    return .disarm;
+                                }
+                                break :blk 0;
+                            };
+                            const clip = &surface.clipboard_val.?;
+                            if (size == 0) {
+                                std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
+                                clip.append(surface.core_surface.alloc, 0) catch {
+                                    cleanup = true;
+                                    return .disarm;
+                                };
+                                surface.core_surface.completeClipboardRequest(surface.clip_req, clip.items[0 .. clip.items.len - 1 :0], true) catch unreachable;
+                                surface.core_surface.alloc.destroy(c);
+                                surface.core_surface.alloc.free(b.slice);
+                                surface.data_offer.?.destroy();
+                                surface.data_offer = null;
+                                return .disarm;
+                            }
+                            clip.appendSlice(surface.core_surface.alloc, b.slice[0..size]) catch {
+                                cleanup = true;
                                 return .disarm;
                             };
-                            const surface = ud.?;
-                            std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
-                            const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
-                            surface.core_surface.completeClipboardRequest(surface.clip_req, text, true) catch unreachable;
-                            if (surface.clipboard_val) |val| surface.core_surface.alloc.free(val);
-                            surface.clipboard_val = text;
-                            surface.core_surface.alloc.destroy(c);
-                            surface.core_surface.alloc.free(b.slice);
-                            surface.data_offer.?.destroy();
-                            surface.data_offer = null;
-                            return .disarm;
+                            return .rearm;
                         }
                     }).cb);
                 }
@@ -1568,7 +1592,7 @@ pub const Surface = struct {
             .primary, .selection => {
                 self.selection_req = state;
                 if (self.selection_val) |clip| {
-                    try self.core_surface.completeClipboardRequest(self.selection_req, clip, true);
+                    try self.core_surface.completeClipboardRequest(self.selection_req, clip.items[0 .. clip.items.len - 1 :0], true);
                 } else if (self.selection_offer) |selection_offer| {
                     const in, const out = try std.posix.pipe();
                     selection_offer.receive("text/plain", out);
@@ -1576,6 +1600,7 @@ pub const Surface = struct {
                     const file = xev.File.initFd(in);
                     const completion = self.core_surface.alloc.create(xev.Completion) catch return;
                     const read_buf = try self.core_surface.alloc.alloc(u8, 1024);
+                    self.selection_val = .empty;
                     file.read(&self.app.loop, completion, .{ .slice = read_buf }, Surface, self, (struct {
                         fn cb(
                             ud: ?*Surface,
@@ -1585,21 +1610,43 @@ pub const Surface = struct {
                             b: xev.ReadBuffer,
                             r: xev.ReadError!usize,
                         ) xev.CallbackAction {
-                            const size = r catch |err| {
-                                log.err("clipboard read error {}", .{err});
+                            const surface = ud.?;
+                            var cleanup = false;
+                            defer if (cleanup) {
+                                surface.selection_val.?.deinit(surface.core_surface.alloc);
+                                surface.selection_val = null;
+                                surface.core_surface.alloc.destroy(c);
+                                surface.core_surface.alloc.free(b.slice);
+                                surface.data_offer.?.destroy();
+                                surface.data_offer = null;
+                            };
+                            const size = r catch |err| blk: {
+                                if (err != error.EOF) {
+                                    log.err("clipboard read error {}", .{err});
+                                    cleanup = true;
+                                    return .disarm;
+                                }
+                                break :blk 0;
+                            };
+                            const clip = &surface.selection_val.?;
+                            if (size == 0) {
+                                std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
+                                clip.append(surface.core_surface.alloc, 0) catch {
+                                    cleanup = true;
+                                    return .disarm;
+                                };
+                                surface.core_surface.completeClipboardRequest(surface.selection_req, clip.items[0 .. clip.items.len - 1 :0], true) catch unreachable;
+                                surface.core_surface.alloc.destroy(c);
+                                surface.core_surface.alloc.free(b.slice);
+                                surface.data_offer.?.destroy();
+                                surface.data_offer = null;
+                                return .disarm;
+                            }
+                            clip.appendSlice(surface.core_surface.alloc, b.slice[0..size]) catch {
+                                cleanup = true;
                                 return .disarm;
                             };
-                            const surface = ud.?;
-                            std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
-                            const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
-                            surface.core_surface.completeClipboardRequest(surface.selection_req, text, true) catch unreachable;
-                            if (surface.selection_val) |val| surface.core_surface.alloc.free(val);
-                            surface.selection_val = text;
-                            surface.core_surface.alloc.destroy(c);
-                            surface.core_surface.alloc.free(b.slice);
-                            surface.selection_offer.?.destroy();
-                            surface.selection_offer = null;
-                            return .disarm;
+                            return .rearm;
                         }
                     }).cb);
                 }
@@ -1620,7 +1667,7 @@ pub const Surface = struct {
         _ = confirm; // autofix
         switch (clipboard_type) {
             .standard => {
-                if (self.clipboard_val) |clip_val| self.core_surface.alloc.free(clip_val);
+                if (self.clipboard_val) |*clip_val| clip_val.deinit(self.core_surface.alloc);
                 self.clipboard_val = null;
 
                 if (self.clip_store) |clip_val| self.core_surface.alloc.free(clip_val);
@@ -1632,7 +1679,7 @@ pub const Surface = struct {
                 self.app.data_device.setSelection(wl_data_source, self.keyboard_serial);
             },
             .selection, .primary => {
-                if (self.selection_val) |clip_val| self.core_surface.alloc.free(clip_val);
+                if (self.selection_val) |*clip_val| clip_val.deinit(self.core_surface.alloc);
                 self.selection_val = null;
 
                 if (self.selection_store) |clip_val| self.core_surface.alloc.free(clip_val);
