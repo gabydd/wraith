@@ -1,5 +1,5 @@
 const std = @import("std");
-const Scanner = @import("zig-wayland").Scanner;
+const Scanner = @import("zig_wayland").Scanner;
 const buildpkg = @import("ghostty").buildpkg;
 
 // Although this function looks imperative, note that its job is to
@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
 
     exe.root_module.addImport("ghostty", ghostty_mod);
 
-    const xkbcommon = b.dependency("zig-xkbcommon", .{}).module("xkbcommon");
+    const xkbcommon = b.dependency("zig_xkbcommon", .{}).module("xkbcommon");
     const libxev = b.dependency("libxev", .{
         .target = target,
         .optimize = optimize,

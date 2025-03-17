@@ -23,7 +23,7 @@
       };
     };
     zls = {
-      url = "github:zigtools/zls/0.13.0";
+      url = "github:zigtools/zls/0.14.0";
     };
   };
 
@@ -40,7 +40,7 @@
       pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
     in {
       devShell.${system} = pkgs-stable.callPackage ./nix/devShell.nix {
-        zig = zig.packages.${system}."0.13.0";
+        zig = zig.packages.${system}."0.14.0";
         zls = zls.packages.${system}.zls;
         wraptest = pkgs-stable.callPackage ./nix/wraptest.nix {};
       };

@@ -1,29 +1,29 @@
 .{
-    .name = "wraith",
-
+    .name = .wraith,
     .version = "0.0.0",
+    .fingerprint = 0xe8511a24b26ef773,
 
     .dependencies = .{
         .ghostty = .{
-            .url = "https://github.com/gabydd/ghostty/archive/a1964e525c08fbdf3da1086268410831561a3123.tar.gz",
-            .hash = "1220b13e06f522dcd93627928ef9a09cbdb20e1fed2739663302e10a1100d648fb8c",
+            .url = "https://github.com/gabydd/ghostty/archive/3005141f63f752342cdfcc7d58dcf103f569f3b4.tar.gz",
+            .hash = "ghostty-1.1.3-5UdBC58c6gIpKSCutm-_6D0fDcAhiJHTNB2viJ6PdIl9",
         },
-        .@"zig-wayland" = .{
-            .url = "https://codeberg.org/ifreund/zig-wayland/archive/a5e2e9b6a6d7fba638ace4d4b24a3b576a02685b.tar.gz",
-            .hash = "1220d41b23ae70e93355bb29dac1c07aa6aeb92427a2dffc4375e94b4de18111248c",
+        .zig_wayland = .{
+            .url = "https://codeberg.org/ifreund/zig-wayland/archive/f3c5d503e540ada8cbcb056420de240af0c094f7.tar.gz",
+            .hash = "wayland-0.4.0-dev-lQa1kjfIAQCmhhQu3xF0KH-94-TzeMXOqfnP0-Dg6Wyy",
         },
-        .@"zig-xkbcommon" = .{
-            .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/d8412eed455c8cfea5b4cda2ea260095ccb47045.tar.gz",
-            .hash = "12200989a0e5c5d8186dd16752e3d83d914d4f54ecca7b3e147443f13a9580ede671",
+        .zig_xkbcommon = .{
+            .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/87e0910e12af79cbb74a37143c881abea32c96b7.tar.gz",
+            .hash = "xkbcommon-0.4.0-dev-VDqIe3a9AQDQa1H4Vh7__mVphznD-7tyNWdnjFgf-9fC",
         },
         .libxev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/db6a52bafadf00360e675fefa7926e8e6c0e9931.tar.gz",
-            .hash = "12206029de146b685739f69b10a6f08baee86b3d0a5f9a659fa2b2b66c9602078bbf",
+            .url = "https://github.com/mitchellh/libxev/archive/3df9337a9e84450a58a2c4af434ec1a036f7b494.tar.gz",
+            .hash = "libxev-0.0.0-86vtc-ziEgDbLP0vihUn1MhsxNKY4GJEga6BEr7oyHpz",
         },
         // must be kept up to date with ghostty
         .iterm2_themes = .{
-            .url = "https://github.com/mbadolato/iTerm2-Color-Schemes/archive/25cb3c3f52c7011cd8a599f8d144fc63f4409eb6.tar.gz",
-            .hash = "1220dc1096bda9721c1f5256177539bf37b41ac6fb70d58eadf0eec45359676382e5",
+            .url = "https://github.com/mbadolato/iTerm2-Color-Schemes/archive/e348884a00ef6c98dc837a873c4a867c9164d8a0.tar.gz",
+            .hash = "N-V-__8AAOCKKgR3_ixUa8LPz0Zz8okA9C6A3kXVLbmdLsGP",
         },
     },
 

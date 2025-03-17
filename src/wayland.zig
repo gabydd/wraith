@@ -33,7 +33,8 @@ const egl = @cImport({
     @cUndef("WL_EGL_PLATFORM");
 });
 
-const xev = @import("xev");
+const xevlib = @import("xev");
+const xev = xevlib.Dynamic;
 
 const SurfaceMap = std.AutoArrayHashMap(u32, *Surface);
 const SeatList = std.SinglyLinkedList(Seat);
@@ -576,7 +577,7 @@ fn repeatCallback(
     e: anyerror!void,
 ) xev.CallbackAction {
     _ = e catch return .disarm;
-    const cancel = if (xev.backend == .epoll) c.op == .cancel else c.op == .timer_remove;
+    const cancel = if (xev.backend == .epoll) c.value.epoll.op == .cancel else c.value.io_uring.op == .timer_remove;
     if (cancel) return .disarm;
 
     const surface = ud orelse return .disarm;
@@ -719,6 +720,10 @@ pub const App = struct {
 
         const seats = try core_app.alloc.create(SeatList);
         seats.* = .{};
+        if (comptime xev.dynamic) xev.detect() catch |err| {
+            std.log.warn("failed to detect xev backend, falling back to " ++
+                "most compatible backend err={}", .{err});
+        };
 
         var context: Context = .{
             .compositor = null,
@@ -901,6 +906,9 @@ pub const App = struct {
             .initial_size,
             .open_config,
 
+            .reset_window_size,
+            .prompt_title,
+            .close_window,
             .new_split,
             .goto_split,
             .resize_split,
@@ -1073,33 +1081,23 @@ pub const App = struct {
 
         var wayland_c: xev.Completion = .{};
         const fd = self.display.getFd();
-        wayland_c = .{
-            .op = .{
-                .poll = if (xev.backend == .epoll) .{
-                    .fd = fd,
-                    .events = std.posix.POLL.IN,
-                } else .{
-                    .fd = fd,
-                },
-            },
-            .userdata = self,
-            .callback = (struct {
-                fn callback(
-                    ud: ?*anyopaque,
-                    l_inner: *xev.Loop,
-                    c_inner: *xev.Completion,
-                    r: xev.Result,
-                ) xev.CallbackAction {
-                    return @call(.always_inline, tick, .{
-                        @as(*App, @ptrCast(@alignCast(ud))),
-                        l_inner,
-                        c_inner,
-                        if (r.poll) void{} else |err| err,
-                    });
-                }
-            }).callback,
-        };
-        self.loop.add(&wayland_c);
+        const stream = xev.Stream.initFd(fd);
+        stream.poll(&self.loop, &wayland_c, .read, App, self, (struct {
+            fn callback(
+                ud: ?*App,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                _: xev.Stream,
+                r: xev.PollError!xev.PollEvent,
+            ) xev.CallbackAction {
+                return @call(.always_inline, tick, .{
+                    ud,
+                    l_inner,
+                    c_inner,
+                    if (r) |_| void{} else |err| err,
+                });
+            }
+        }).callback);
         _ = try self.app.tick(self);
         _ = self.display.flush();
         try self.loop.run(.until_done);
@@ -1180,12 +1178,12 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
                         c: *xev.Completion,
                         s: xev.File,
                         _: xev.WriteBuffer,
-                        r: xev.File.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch |err| {
                             log.err("clipboard write error {}", .{err});
                         };
-                        std.posix.close(s.fd);
+                        std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
                         ud.?.core_surface.alloc.destroy(c);
                         return .disarm;
                     }
@@ -1214,12 +1212,12 @@ fn selectionSourceListener(selection_source: *zwp.PrimarySelectionSourceV1, even
                         c: *xev.Completion,
                         s: xev.File,
                         _: xev.WriteBuffer,
-                        r: xev.File.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch |err| {
                             log.err("clipboard write error {}", .{err});
                         };
-                        std.posix.close(s.fd);
+                        std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
                         ud.?.core_surface.alloc.destroy(c);
                         return .disarm;
                     }
@@ -1546,14 +1544,14 @@ pub const Surface = struct {
                             c: *xev.Completion,
                             s: xev.File,
                             b: xev.ReadBuffer,
-                            r: xev.File.ReadError!usize,
+                            r: xev.ReadError!usize,
                         ) xev.CallbackAction {
                             const size = r catch |err| {
                                 log.err("clipboard read error {}", .{err});
                                 return .disarm;
                             };
                             const surface = ud.?;
-                            std.posix.close(s.fd);
+                            std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
                             const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
                             surface.core_surface.completeClipboardRequest(surface.clip_req, text, true) catch unreachable;
                             if (surface.clipboard_val) |val| surface.core_surface.alloc.free(val);
@@ -1585,14 +1583,14 @@ pub const Surface = struct {
                             c: *xev.Completion,
                             s: xev.File,
                             b: xev.ReadBuffer,
-                            r: xev.File.ReadError!usize,
+                            r: xev.ReadError!usize,
                         ) xev.CallbackAction {
                             const size = r catch |err| {
                                 log.err("clipboard read error {}", .{err});
                                 return .disarm;
                             };
                             const surface = ud.?;
-                            std.posix.close(s.fd);
+                            std.posix.close(if (xev.backend == .epoll) s.backend.epoll.fd else s.backend.io_uring.fd);
                             const text = surface.core_surface.alloc.dupeZ(u8, b.slice[0..size]) catch return .disarm;
                             surface.core_surface.completeClipboardRequest(surface.selection_req, text, true) catch unreachable;
                             if (surface.selection_val) |val| surface.core_surface.alloc.free(val);
@@ -1684,7 +1682,7 @@ pub const Surface = struct {
             }
         }
 
-        const version = try gl.glad.load(egl.eglGetProcAddress);
+        const version = try gl.glad.load(&egl.eglGetProcAddress);
         errdefer gl.glad.unload();
         log.info("loaded OpenGL {}.{}", .{
             gl.glad.versionMajor(@intCast(version)),
@@ -1733,7 +1731,7 @@ pub const Surface = struct {
         );
     }
 
-    pub fn defaultTermioEnv(self: *Surface) !?std.process.EnvMap {
+    pub fn defaultTermioEnv(self: *Surface) !std.process.EnvMap {
         const alloc = self.app.app.alloc;
         const env = try internal_os.getEnvMap(alloc);
         return env;
