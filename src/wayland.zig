@@ -207,8 +207,7 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
         },
         .frame => {
             const surface = seat.surface orelse return;
-            if (seat.axis_y == 0 and seat.axis_x == 0 and
-                seat.axis_discrete_y == 0 and seat.axis_discrete_x == 0) return;
+
             defer {
                 seat.axis_x = 0;
                 seat.axis_y = 0;
@@ -216,20 +215,25 @@ fn pointerListener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *Seat
                 seat.axis_discrete_x = 0;
             }
 
-            const discrete_multiplier = 120;
-            const continuous_multiplier = 10;
-
-            const scroll_y: f64 = blk: {
-                const discrete_y: f64 = @floatFromInt(seat.axis_discrete_y);
-                break :blk discrete_y * discrete_multiplier + seat.axis_y * continuous_multiplier;
-            };
-            const scroll_x: f64 = blk: {
+            // We do two separate scroll callbacks because discrete and precision scrolls are
+            // treated differently. Probably any given frame will only have one type of scroll
+            // event, but in the end it won't matter - libghostty will maintain the state for us
+            if (seat.axis_discrete_x != 0 or seat.axis_discrete_y != 0) {
                 const discrete_x: f64 = @floatFromInt(seat.axis_discrete_x);
-                break :blk discrete_x * discrete_multiplier + seat.axis_x * continuous_multiplier;
-            };
-            surface.core_surface.scrollCallback(scroll_x, -scroll_y, .{ .precision = true }) catch |err| {
-                log.err("error in scroll callback err={}", .{err});
-            };
+                const discrete_y: f64 = @floatFromInt(seat.axis_discrete_y);
+                surface.core_surface.scrollCallback(discrete_x, -discrete_y, .{ .precision = false }) catch |err| {
+                    log.err("error in scroll callback err={}", .{err});
+                };
+            }
+
+            if (seat.axis_x != 0 or seat.axis_y != 0) {
+                const continuous_multiplier = 10;
+                const scroll_y: f64 = seat.axis_y * continuous_multiplier;
+                const scroll_x: f64 = seat.axis_x * continuous_multiplier;
+                surface.core_surface.scrollCallback(scroll_x, -scroll_y, .{ .precision = true }) catch |err| {
+                    log.err("error in scroll callback err={}", .{err});
+                };
+            }
         },
         .axis_source => |ev| seat.axis_source = ev.axis_source,
 
